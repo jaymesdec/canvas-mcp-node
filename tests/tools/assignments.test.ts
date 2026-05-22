@@ -1,0 +1,178 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { registerAssignmentTools } from "../../src/tools/assignments.js";
+import { Anonymizer } from "../../src/anonymizer.js";
+
+interface ToolResponse {
+  content?: Array<{ type: string; text: string }>;
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+}
+
+async function tempRoot(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), "canvas-anon-assign-"));
+}
+
+let anonRoot: string;
+let anonymizer: Anonymizer;
+beforeEach(async () => {
+  anonRoot = await tempRoot();
+  anonymizer = new Anonymizer({ rootDir: anonRoot });
+  await anonymizer.init();
+});
+afterEach(async () => {
+  await fs.rm(anonRoot, { recursive: true, force: true });
+});
+
+describe("registerAssignmentTools", () => {
+  it("registers all three assignment tools", () => {
+    const { client } = buildMockCanvas([]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+    expect([...harness.tools.keys()].sort()).toEqual([
+      "get_assignment_details",
+      "get_assignment_rubric_details",
+      "list_assignments",
+    ]);
+  });
+
+  it("list_assignments paginates and threads include[] params", async () => {
+    const { client, requests } = buildMockCanvas([
+      { status: 200, data: [{ id: 1, name: "HW1" }, { id: 2, name: "HW2" }] },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include: ["all_dates"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments");
+    expect(requests[0]?.params).toMatchObject({ "include[]": ["all_dates"] });
+    expect(result.structuredContent?.count).toBe(2);
+  });
+
+  it("list_assignments with include=submission anonymizes embedded student data when anonymous=true (default)", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          {
+            id: 1,
+            name: "HW1",
+            submission: {
+              id: 99,
+              user_id: 1001,
+              user: { id: 1001, name: "Alice Real", role: "student" },
+            },
+          },
+        ],
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include: ["submission"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent?.anonymized).toBe(true);
+    const assignments = result.structuredContent?.assignments as Array<{
+      submission: { user: { name: string } };
+    }>;
+    expect(assignments[0]?.submission.user.name).toBe("Student 1");
+  });
+
+  it("list_assignments with anonymous=false leaves embedded submissions untouched", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          {
+            id: 1,
+            name: "HW1",
+            submission: { id: 99, user_id: 1001, user: { id: 1001, name: "Alice Real", role: "student" } },
+          },
+        ],
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include: ["submission"],
+      anonymous: false,
+    })) as ToolResponse;
+    expect(result.structuredContent?.anonymized).toBe(false);
+    const assignments = result.structuredContent?.assignments as Array<{
+      submission: { user: { name: string } };
+    }>;
+    expect(assignments[0]?.submission.user.name).toBe("Alice Real");
+  });
+
+  it("get_assignment_details returns the raw assignment", async () => {
+    const { client, requests } = buildMockCanvas([
+      { status: 200, data: { id: 999, name: "Project", due_at: "2026-06-01T23:59:00Z" } },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("get_assignment_details", {
+      course_identifier: 60366,
+      assignment_id: 999,
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments/999");
+    expect(result.structuredContent?.id).toBe(999);
+  });
+
+  it("get_assignment_rubric_details surfaces a clean message when no rubric is attached", async () => {
+    const { client } = buildMockCanvas([
+      { status: 200, data: { id: 999, name: "Project", rubric: null } },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("get_assignment_rubric_details", {
+      course_identifier: 60366,
+      assignment_id: 999,
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent?.rubric).toBeNull();
+    expect(result.structuredContent?.message).toMatch(/No rubric/);
+  });
+
+  it("get_assignment_rubric_details returns criterion list when rubric is attached", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: {
+          id: 999,
+          rubric: [
+            { id: "_8027", description: "Clarity", points: 4, ratings: [] },
+            { id: "_8028", description: "Depth", points: 4, ratings: [] },
+          ],
+          rubric_settings: { points_possible: 8 },
+        },
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("get_assignment_rubric_details", {
+      course_identifier: 60366,
+      assignment_id: 999,
+    })) as ToolResponse;
+    const rubric = result.structuredContent?.rubric as Array<{ id: string }>;
+    expect(rubric).toHaveLength(2);
+    expect(rubric[0]?.id).toBe("_8027");
+    expect(result.structuredContent?.rubric_settings).toMatchObject({ points_possible: 8 });
+  });
+});
