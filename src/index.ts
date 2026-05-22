@@ -16,6 +16,7 @@ import { registerRubricTools } from "./tools/rubrics.js";
 import { registerUserTools } from "./tools/users.js";
 import { registerSubmissionTools } from "./tools/submissions.js";
 import { registerGradingTools } from "./tools/grading.js";
+import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
   registerGradingTools(server, canvas);
   registerAnonymizationTools(server, canvas, anonymizer);
   registerCompetencyTools(server, schoolConfig);
+  registerCodeExecutionTools(server, anonymizer);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
