@@ -65,23 +65,60 @@ describe("registerUserTools", () => {
       expect(result.structuredContent?.anonymized).toBe(true);
     });
 
-    it("with anonymous=false returns raw names/emails", async () => {
-      const { client } = buildMockCanvas([
-        {
-          status: 200,
-          data: [
-            { id: 1001, name: "Alice Real", email: "alice@school.edu", enrollments: [{ type: "StudentEnrollment" }] },
-          ],
-        },
-      ]);
-      const harness = buildToolHarness();
-      registerUserTools(harness.server as never, client, anonymizer);
-      const result = (await harness.call("list_users", {
-        course_identifier: 60366,
-        anonymous: false,
-      })) as ToolResponse;
-      const users = result.structuredContent?.users as Array<{ name: string }>;
-      expect(users[0]?.name).toBe("Alice Real");
+    it("with anonymous=false BUT no operator env opt-in: silently anonymizes and surfaces a warning", async () => {
+      const previousEnv = process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+      delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+      try {
+        const { client } = buildMockCanvas([
+          {
+            status: 200,
+            data: [
+              { id: 1001, name: "Alice Real", email: "alice@school.edu", enrollments: [{ type: "StudentEnrollment" }] },
+            ],
+          },
+        ]);
+        const harness = buildToolHarness();
+        registerUserTools(harness.server as never, client, anonymizer);
+        const result = (await harness.call("list_users", {
+          course_identifier: 60366,
+          anonymous: false,
+        })) as ToolResponse;
+        expect(result.structuredContent?.anonymized).toBe(true);
+        const users = result.structuredContent?.users as Array<{ name: string }>;
+        expect(users[0]?.name).toBe("Student 1");
+        const warnings = result.structuredContent?.warnings as string[];
+        expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
+      } finally {
+        if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+        else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
+      }
+    });
+
+    it("with anonymous=false AND operator env opt-in: returns raw names/emails", async () => {
+      const previousEnv = process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+      process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = "true";
+      try {
+        const { client } = buildMockCanvas([
+          {
+            status: 200,
+            data: [
+              { id: 1001, name: "Alice Real", email: "alice@school.edu", enrollments: [{ type: "StudentEnrollment" }] },
+            ],
+          },
+        ]);
+        const harness = buildToolHarness();
+        registerUserTools(harness.server as never, client, anonymizer);
+        const result = (await harness.call("list_users", {
+          course_identifier: 60366,
+          anonymous: false,
+        })) as ToolResponse;
+        const users = result.structuredContent?.users as Array<{ name: string }>;
+        expect(users[0]?.name).toBe("Alice Real");
+        expect(result.structuredContent?.warnings).toBeUndefined();
+      } finally {
+        if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+        else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
+      }
     });
 
     it("preserves teachers verbatim even when listed with anonymous=true", async () => {

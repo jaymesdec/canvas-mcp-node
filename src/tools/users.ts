@@ -5,6 +5,23 @@ import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
 import { CanvasApiError, type CanvasUserLite } from "../types.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
+
+/**
+ * Resolve the effective anonymization flag, honoring the operator env gate.
+ * When the caller asks for anonymous: false but CANVAS_MCP_ALLOW_DEANONYMIZE is
+ * not set, force back to true and surface a warning in the response.
+ */
+function resolveAnonymous(requested: boolean | undefined): {
+  anonymous: boolean;
+  overridden: boolean;
+} {
+  const wantedAnonymous = requested ?? true;
+  if (wantedAnonymous === false && !isDeanonymizationAllowed()) {
+    return { anonymous: true, overridden: true };
+  }
+  return { anonymous: wantedAnonymous, overridden: false };
+}
 
 const LIST_USERS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -84,11 +101,12 @@ export function registerUserTools(
           { params },
         );
 
-        const anonymous = args.anonymous ?? true;
+        const { anonymous, overridden } = resolveAnonymous(args.anonymous);
         const finalUsers = anonymous
           ? await Promise.all(users.map((user) => anonymizer.anonymizeUser(courseId, user)))
           : users;
 
+        const warnings = overridden ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
             course_id: courseId,
@@ -96,9 +114,14 @@ export function registerUserTools(
             pages,
             truncated,
             anonymized: anonymous,
+            ...(warnings ? { warnings } : {}),
             users: finalUsers,
           },
-          { summary: `Course ${courseId}: ${finalUsers.length} user(s)${anonymous ? " (anonymized)" : ""}.` },
+          {
+            summary:
+              `Course ${courseId}: ${finalUsers.length} user(s)${anonymous ? " (anonymized)" : ""}.` +
+              (overridden ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
+          },
         );
       });
     },
@@ -185,7 +208,7 @@ export function registerUserTools(
           throw error;
         }
 
-        const anonymous = args.anonymous ?? true;
+        const { anonymous, overridden } = resolveAnonymous(args.anonymous);
         // For account-wide users we don't have course context — use a synthetic
         // course id of 0 ("account scope") so pseudonyms are stable account-wide
         // but never collide with real per-course pseudonyms.
@@ -198,6 +221,7 @@ export function registerUserTools(
             )
           : users;
 
+        const warnings = overridden ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
             account_id: args.account_id,
@@ -205,10 +229,13 @@ export function registerUserTools(
             pages,
             truncated,
             anonymized: anonymous,
+            ...(warnings ? { warnings } : {}),
             users: finalUsers,
           },
           {
-            summary: `Account ${args.account_id}: ${finalUsers.length} user(s)${anonymous ? " (student/unknown anonymized)" : ""}.`,
+            summary:
+              `Account ${args.account_id}: ${finalUsers.length} user(s)${anonymous ? " (student/unknown anonymized)" : ""}.` +
+              (overridden ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
           },
         );
       });

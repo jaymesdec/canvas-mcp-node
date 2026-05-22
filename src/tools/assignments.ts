@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
 
 const LIST_ASSIGNMENTS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -77,7 +78,10 @@ export function registerAssignmentTools(
           { params },
         );
 
-        const anonymous = args.anonymous ?? true;
+        const wantedAnonymous = args.anonymous ?? true;
+        const deanonAllowed = isDeanonymizationAllowed();
+        const overridden = wantedAnonymous === false && !deanonAllowed;
+        const anonymous = overridden ? true : wantedAnonymous;
         const hasSubmissionInclude =
           Array.isArray(args.include) &&
           args.include.some((token) => token === "submission" || token === "submission_history");
@@ -104,6 +108,7 @@ export function registerAssignmentTools(
             )
           : assignments;
 
+        const warnings = overridden && hasSubmissionInclude ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
             course_id: courseId,
@@ -111,9 +116,14 @@ export function registerAssignmentTools(
             pages,
             truncated,
             anonymized: anonymous && hasSubmissionInclude,
+            ...(warnings ? { warnings } : {}),
             assignments: finalAssignments,
           },
-          { summary: `Course ${courseId}: ${finalAssignments.length} assignment(s).` },
+          {
+            summary:
+              `Course ${courseId}: ${finalAssignments.length} assignment(s).` +
+              (overridden && hasSubmissionInclude ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
+          },
         );
       });
     },

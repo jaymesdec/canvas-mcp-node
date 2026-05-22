@@ -5,6 +5,7 @@ import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
 import type { CanvasUserLite } from "../types.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { DEANON_DENIED_NOTE_MAP, isDeanonymizationAllowed } from "../featureFlags.js";
 
 const CREATE_STUDENT_ANONYMIZATION_MAP_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -45,19 +46,21 @@ export function registerAnonymizationTools(
 
         const merge = await anonymizer.mergeIntoMap(courseId, students);
         const map = merge.map;
+        const deanonAllowed = isDeanonymizationAllowed();
         const mapping = students.map((student) => {
           const userIdKey = String(student.id);
           const entry = map.students[userIdKey];
           return {
             user_id: student.id,
-            real_name: student.name ?? null,
-            real_email: student.email ?? null,
+            real_name: deanonAllowed ? (student.name ?? null) : null,
+            real_email: deanonAllowed ? (student.email ?? null) : null,
             pseudonym: entry?.pseudonym ?? null,
             anonymized_email: entry?.anonymizedEmail ?? null,
             status: entry?.status ?? "active",
           };
         });
 
+        const warnings = deanonAllowed ? undefined : [DEANON_DENIED_NOTE_MAP];
         return jsonResult(
           {
             course_id: courseId,
@@ -67,12 +70,15 @@ export function registerAnonymizationTools(
             newly_allocated: merge.newlyAllocated,
             total_active: merge.totalActive,
             total_historical: merge.totalHistorical,
+            real_names_visible: deanonAllowed,
+            ...(warnings ? { warnings } : {}),
             mapping,
           },
           {
             summary:
               `Course ${courseId}: ${students.length} student(s) in roster, ` +
-              `${merge.newlyAllocated} newly allocated, ${merge.totalHistorical} historical.`,
+              `${merge.newlyAllocated} newly allocated, ${merge.totalHistorical} historical.` +
+              (deanonAllowed ? "" : ` [real names suppressed — ${DEANON_DENIED_NOTE_MAP}]`),
           },
         );
       });

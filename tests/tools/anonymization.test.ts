@@ -36,8 +36,53 @@ describe("registerAnonymizationTools", () => {
   });
 
   describe("create_student_anonymization_map", () => {
-    it("allocates pseudonyms for every student on first invocation and returns the mapping", async () => {
+    afterEach(() => {
+      delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+    });
+
+    it("without operator opt-in: allocates pseudonyms but suppresses real_name/real_email + warns", async () => {
+      delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
       const { client, requests } = buildMockCanvas([
+        {
+          status: 200,
+          data: [
+            { id: 1001, name: "Alice", email: "alice@school.edu", enrollments: [{ type: "StudentEnrollment" }] },
+            { id: 1002, name: "Bob", email: "bob@school.edu", enrollments: [{ type: "StudentEnrollment" }] },
+          ],
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerAnonymizationTools(harness.server as never, client, anonymizer);
+      const result = (await harness.call("create_student_anonymization_map", {
+        course_identifier: 60366,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.params).toMatchObject({
+        "enrollment_type[]": ["student"],
+        "include[]": ["enrollments", "email"],
+      });
+      expect(result.structuredContent?.real_names_visible).toBe(false);
+      const mapping = result.structuredContent?.mapping as Array<{
+        user_id: number;
+        real_name: string | null;
+        real_email: string | null;
+        pseudonym: string;
+      }>;
+      expect(mapping).toHaveLength(2);
+      expect(mapping[0]?.pseudonym).toBe("Student 1");
+      // Real names suppressed:
+      expect(mapping[0]?.real_name).toBeNull();
+      expect(mapping[0]?.real_email).toBeNull();
+      const warnings = result.structuredContent?.warnings as string[];
+      expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
+      // The map file on disk still binds real ↔ pseudonym:
+      const onDisk = await anonymizer.loadMap(60366);
+      expect(onDisk?.students["1001"]?.pseudonym).toBe("Student 1");
+    });
+
+    it("WITH operator opt-in: returns the full real-name mapping", async () => {
+      process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = "true";
+      const { client } = buildMockCanvas([
         {
           status: 200,
           data: [
@@ -52,21 +97,15 @@ describe("registerAnonymizationTools", () => {
       const result = (await harness.call("create_student_anonymization_map", {
         course_identifier: 60366,
       })) as ToolResponse;
-      expect(result.isError).toBeFalsy();
-      expect(requests[0]?.params).toMatchObject({
-        "enrollment_type[]": ["student"],
-        "include[]": ["enrollments", "email"],
-      });
+      expect(result.structuredContent?.real_names_visible).toBe(true);
       expect(result.structuredContent?.newly_allocated).toBe(3);
-      expect(result.structuredContent?.total_active).toBe(3);
       const mapping = result.structuredContent?.mapping as Array<{
-        user_id: number;
         real_name: string;
         pseudonym: string;
       }>;
-      expect(mapping).toHaveLength(3);
       expect(mapping.map((entry) => entry.pseudonym)).toEqual(["Student 1", "Student 2", "Student 3"]);
       expect(mapping[0]?.real_name).toBe("Alice");
+      expect(result.structuredContent?.warnings).toBeUndefined();
     });
 
     it("is idempotent — second call with the same roster reports newly_allocated=0", async () => {

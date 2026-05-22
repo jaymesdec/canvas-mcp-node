@@ -89,32 +89,76 @@ describe("registerAssignmentTools", () => {
     expect(assignments[0]?.submission.user.name).toBe("Student 1");
   });
 
-  it("list_assignments with anonymous=false leaves embedded submissions untouched", async () => {
-    const { client } = buildMockCanvas([
-      {
-        status: 200,
-        data: [
-          {
-            id: 1,
-            name: "HW1",
-            submission: { id: 99, user_id: 1001, user: { id: 1001, name: "Alice Real", role: "student" } },
-          },
-        ],
-      },
-    ]);
-    const harness = buildToolHarness();
-    registerAssignmentTools(harness.server as never, client, anonymizer);
+  it("list_assignments anonymous=false without operator env opt-in: silently anonymizes + warns", async () => {
+    const previousEnv = process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+    delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+    try {
+      const { client } = buildMockCanvas([
+        {
+          status: 200,
+          data: [
+            {
+              id: 1,
+              name: "HW1",
+              submission: { id: 99, user_id: 1001, user: { id: 1001, name: "Alice Real", role: "student" } },
+            },
+          ],
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer);
 
-    const result = (await harness.call("list_assignments", {
-      course_identifier: 60366,
-      include: ["submission"],
-      anonymous: false,
-    })) as ToolResponse;
-    expect(result.structuredContent?.anonymized).toBe(false);
-    const assignments = result.structuredContent?.assignments as Array<{
-      submission: { user: { name: string } };
-    }>;
-    expect(assignments[0]?.submission.user.name).toBe("Alice Real");
+      const result = (await harness.call("list_assignments", {
+        course_identifier: 60366,
+        include: ["submission"],
+        anonymous: false,
+      })) as ToolResponse;
+      expect(result.structuredContent?.anonymized).toBe(true);
+      const assignments = result.structuredContent?.assignments as Array<{
+        submission: { user: { name: string } };
+      }>;
+      expect(assignments[0]?.submission.user.name).toBe("Student 1");
+      const warnings = result.structuredContent?.warnings as string[];
+      expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
+    } finally {
+      if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+      else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
+    }
+  });
+
+  it("list_assignments anonymous=false WITH operator env opt-in: leaves embedded submissions untouched", async () => {
+    const previousEnv = process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+    process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = "true";
+    try {
+      const { client } = buildMockCanvas([
+        {
+          status: 200,
+          data: [
+            {
+              id: 1,
+              name: "HW1",
+              submission: { id: 99, user_id: 1001, user: { id: 1001, name: "Alice Real", role: "student" } },
+            },
+          ],
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer);
+
+      const result = (await harness.call("list_assignments", {
+        course_identifier: 60366,
+        include: ["submission"],
+        anonymous: false,
+      })) as ToolResponse;
+      expect(result.structuredContent?.anonymized).toBe(false);
+      const assignments = result.structuredContent?.assignments as Array<{
+        submission: { user: { name: string } };
+      }>;
+      expect(assignments[0]?.submission.user.name).toBe("Alice Real");
+    } finally {
+      if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
+      else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
+    }
   });
 
   it("get_assignment_details returns the raw assignment", async () => {
