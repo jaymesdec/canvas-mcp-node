@@ -1,0 +1,28 @@
+{
+  "schoolName": "Example High School",
+  "competencyFramework": {
+    "name": "Example School's Core Competencies",
+    "description": "Replace this with your school's published competency framework. Each entry surfaces in list_competencies for use in narratives, rubric grading, and other workflows.",
+    "competencies": [
+      {
+        "key": "critical_thinking",
+        "name": "Critical Thinking",
+        "description": "Analyzes information, identifies assumptions, and evaluates evidence."
+      },
+      {
+        "key": "communication",
+        "name": "Communication",
+        "description": "Conveys ideas clearly in writing, speech, and other modalities."
+      },
+      {
+        "key": "collaboration",
+        "name": "Collaboration",
+        "description": "Works productively with peers toward shared goals."
+      }
+    ]
+  },
+  "academicCalendar": {
+    "weeksPerYear": 36,
+    "termNames": ["Fall", "Spring"]
+  }
+}

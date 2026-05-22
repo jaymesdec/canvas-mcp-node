@@ -1,0 +1,57 @@
+{
+  "schoolName": "Franklin School (Jersey City, NJ)",
+  "competencyFramework": {
+    "name": "Franklin's 9 Transdisciplinary Competencies",
+    "description": "Canonical definitions from Franklin's TD Competencies Rubric (2026). Used across grading, narratives, council reviews, and transition reports.",
+    "competencies": [
+      {
+        "key": "collaboration",
+        "name": "Collaboration",
+        "description": "Works productively and respectfully with others to achieve shared goals"
+      },
+      {
+        "key": "storytelling_communication",
+        "name": "Storytelling / Communication",
+        "description": "Communicates ideas clearly, creatively, and appropriately for audience and purpose"
+      },
+      {
+        "key": "reflexivity",
+        "name": "Reflexivity",
+        "description": "Reflects critically on learning, decisions, and assumptions"
+      },
+      {
+        "key": "empathy_perspective_taking",
+        "name": "Empathy / Perspective Taking",
+        "description": "Demonstrates understanding and respect for others' perspectives and experiences"
+      },
+      {
+        "key": "knowledge_based_reasoning",
+        "name": "Knowledge-Based Reasoning",
+        "description": "Applies disciplinary and interdisciplinary knowledge to solve problems"
+      },
+      {
+        "key": "futures_thinking",
+        "name": "Futures Thinking",
+        "description": "Envisions and prepares for multiple and preferred futures"
+      },
+      {
+        "key": "systems_thinking",
+        "name": "Systems Thinking",
+        "description": "Identifies and understands interconnections within and across systems"
+      },
+      {
+        "key": "adaptability",
+        "name": "Adaptability",
+        "description": "Responds constructively to change and ambiguity"
+      },
+      {
+        "key": "agency",
+        "name": "Agency",
+        "description": "Takes initiative and ownership of learning and actions"
+      }
+    ]
+  },
+  "academicCalendar": {
+    "weeksPerYear": 35
+  }
+}

@@ -5,6 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import { CanvasClient } from "./canvasClient.js";
 import { Anonymizer } from "./anonymizer.js";
+import { loadSchoolConfig } from "./schoolConfig.js";
+import { registerCompetencyTools } from "./tools/competencies.js";
 import { registerCourseTools } from "./tools/courses.js";
 import { registerModuleTools } from "./tools/modules.js";
 import { registerPageTools } from "./tools/pages.js";
@@ -42,6 +44,13 @@ async function main(): Promise<void> {
   const anonymizer = new Anonymizer();
   await anonymizer.init();
 
+  const schoolConfig = await loadSchoolConfig();
+  if (schoolConfig) {
+    process.stderr.write(
+      `[${SERVER_NAME}] loaded school config${schoolConfig.schoolName ? `: ${schoolConfig.schoolName}` : ""}\n`,
+    );
+  }
+
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
@@ -59,6 +68,7 @@ async function main(): Promise<void> {
   registerSubmissionTools(server, canvas, anonymizer);
   registerGradingTools(server, canvas);
   registerAnonymizationTools(server, canvas, anonymizer);
+  registerCompetencyTools(server, schoolConfig);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
