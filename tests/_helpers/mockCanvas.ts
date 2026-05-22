@@ -75,6 +75,8 @@ export function buildMockCanvas(initial: FakeResponse[] = [], options?: { baseUr
     adapter,
     validateStatus: () => true,
     headers: { Authorization: "Bearer test-token" },
+    // Identity transform so the test adapter sees the original object (not a JSON string).
+    transformRequest: [(data: unknown) => data],
   });
 
   const client = new CanvasClient({
