@@ -4,6 +4,8 @@ export interface McpTextResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
   structuredContent?: Record<string, unknown>;
+  /** Index signature required by the MCP SDK's CallToolResult type. */
+  [key: string]: unknown;
 }
 
 /** Wrap a JSON-serializable payload as the tool's text content + structured field. */
