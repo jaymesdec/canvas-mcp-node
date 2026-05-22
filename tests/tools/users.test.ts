@@ -206,5 +206,22 @@ describe("registerUserTools", () => {
       await harness.call("list_account_users", { account_id: 1, search_term: "Smith" });
       expect(requests[0]?.params).toMatchObject({ search_term: "Smith" });
     });
+
+    it("defaults account_id from CANVAS_ACCOUNT_ID env var when not passed", async () => {
+      const previousEnv = process.env.CANVAS_ACCOUNT_ID;
+      process.env.CANVAS_ACCOUNT_ID = "self";
+      try {
+        const { client, requests } = buildMockCanvas([{ status: 200, data: [] }]);
+        const harness = buildToolHarness();
+        registerUserTools(harness.server as never, client, anonymizer);
+        const result = (await harness.call("list_account_users", { search_term: "Smith" })) as ToolResponse;
+        expect(result.isError).toBeFalsy();
+        expect(requests[0]?.url).toBe("/api/v1/accounts/self/users");
+        expect(result.structuredContent?.account_id).toBe("self");
+      } finally {
+        if (previousEnv === undefined) delete process.env.CANVAS_ACCOUNT_ID;
+        else process.env.CANVAS_ACCOUNT_ID = previousEnv;
+      }
+    });
   });
 });

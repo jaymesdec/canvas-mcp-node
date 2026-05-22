@@ -29,6 +29,15 @@ This applies to:
 
 Pseudonyms persist per-course on disk at `~/.canvas-mcp/anon-maps/{courseId}.json` (override the directory via `ANON_MAP_DIR`). The same student receives the same `Student N` across MCP restarts and weeks of conversations, which is what makes longitudinal artifacts (narratives, council reviews, transition reports) coherent.
 
+## Account-scoped tools
+
+For admin workflows that need to look beyond the token-owner's own enrollments:
+
+- `list_account_courses(account_id?, search_term?, state?, ...)` — search the full course catalog
+- `list_account_users(account_id?, search_term?, enrollment_type?, ...)` — search every user in the account
+
+Both default `account_id` from the `CANVAS_ACCOUNT_ID` env var. Set that to `self` (most common) or a numeric account id in your Claude Desktop config so you don't have to remember it on every call. A clean "requires account-admin scope" error surfaces if the token is missing the permission.
+
 ## Plan
 
 See `docs/plans/2026-05-22-001-feat-canvas-mcp-typescript-port-plan.md`.

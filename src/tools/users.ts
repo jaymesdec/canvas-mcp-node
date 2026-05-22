@@ -6,6 +6,7 @@ import type { Anonymizer } from "../anonymizer.js";
 import { CanvasApiError, type CanvasUserLite } from "../types.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
 import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
+import { resolveAccountId } from "./courses.js";
 
 /**
  * Resolve the effective anonymization flag, honoring the operator env gate.
@@ -46,7 +47,10 @@ const LIST_USER_ENROLLMENTS_INPUT = {
 };
 
 const LIST_ACCOUNT_USERS_INPUT = {
-  account_id: z.union([z.string(), z.number()]).describe("Canvas account id (account-admin scope required)."),
+  account_id: z
+    .union([z.string(), z.number()])
+    .optional()
+    .describe("Canvas account id (account-admin scope required). Defaults to CANVAS_ACCOUNT_ID env var if set."),
   search_term: z.string().optional(),
   enrollment_type: z.array(z.string()).optional(),
   anonymous: z
@@ -170,12 +174,13 @@ export function registerUserTools(
     },
     async (input) => {
       const args = input as {
-        account_id: string | number;
+        account_id?: string | number;
         search_term?: string;
         enrollment_type?: string[];
         anonymous?: boolean;
       };
       return safeHandler("list_account_users", async () => {
+        const accountId = resolveAccountId(args.account_id);
         const params: Record<string, unknown> = {};
         if (args.search_term) params.search_term = args.search_term;
         if (args.enrollment_type && args.enrollment_type.length > 0) {
@@ -187,7 +192,7 @@ export function registerUserTools(
         let pages: number;
         try {
           const result = await canvas.getPaginated<CanvasUserLite>(
-            `/api/v1/accounts/${args.account_id}/users`,
+            `/api/v1/accounts/${accountId}/users`,
             { params },
           );
           users = result.items;
@@ -201,7 +206,7 @@ export function registerUserTools(
             throw new CanvasApiError({
               code: error.code,
               status: error.status,
-              message: `list_account_users requires account-admin scope on the Canvas token (account_id=${args.account_id}). The current token is missing the necessary permissions.`,
+              message: `list_account_users requires account-admin scope on the Canvas token (account_id=${accountId}). The current token is missing the necessary permissions.`,
               endpoint: error.endpoint,
             });
           }
@@ -224,7 +229,7 @@ export function registerUserTools(
         const warnings = overridden ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
-            account_id: args.account_id,
+            account_id: accountId,
             count: finalUsers.length,
             pages,
             truncated,
@@ -234,7 +239,7 @@ export function registerUserTools(
           },
           {
             summary:
-              `Account ${args.account_id}: ${finalUsers.length} user(s)${anonymous ? " (student/unknown anonymized)" : ""}.` +
+              `Account ${accountId}: ${finalUsers.length} user(s)${anonymous ? " (student/unknown anonymized)" : ""}.` +
               (overridden ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
           },
         );
