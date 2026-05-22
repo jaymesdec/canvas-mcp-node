@@ -1,0 +1,91 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-latest.schema.json",
+  "manifest_version": "0.3",
+  "name": "canvas-mcp",
+  "display_name": "Canvas LMS",
+  "version": "0.3.0",
+  "description": "Canvas LMS MCP server with FERPA-aware anonymization, account-admin tools, grading suite, and a TypeScript code-execution escape hatch.",
+  "long_description": "Drop-in MCP server for Canvas LMS. Lists/creates Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk with dry-run + bounded concurrency), and exposes execute_typescript for token-efficient bulk operations against a curated code_api/. Every student-data path defaults to pseudonymized output (Student 1, Student 2, …) with a per-course persistent map on disk so longitudinal artifacts stay coherent. De-anonymization is gated by the operator — Claude cannot turn it off without an explicit env opt-in. Ships an optional Franklin School preset (9 TD Competencies) that other schools can swap by pointing SCHOOL_CONFIG at their own JSON file.",
+  "author": {
+    "name": "Franklin School"
+  },
+  "license": "MIT",
+  "keywords": ["canvas", "lms", "education", "ferpa", "grading", "teaching"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "CANVAS_API_URL": "${user_config.canvas_api_url}",
+        "CANVAS_API_TOKEN": "${user_config.canvas_api_token}",
+        "CANVAS_ACCOUNT_ID": "${user_config.canvas_account_id}",
+        "SCHOOL_CONFIG": "${user_config.school_config}",
+        "ANON_MAP_DIR": "${user_config.anon_map_dir}",
+        "CANVAS_MCP_ALLOW_DEANONYMIZE": "${user_config.allow_deanonymize}",
+        "TS_SANDBOX_BLOCK_OUTBOUND": "${user_config.ts_sandbox_block_outbound}",
+        "TS_SANDBOX_ALLOWLIST_HOSTS": "${user_config.ts_sandbox_allowlist_hosts}"
+      }
+    }
+  },
+  "user_config": {
+    "canvas_api_url": {
+      "type": "string",
+      "title": "Canvas API URL",
+      "description": "Base URL for your Canvas instance, e.g. https://franklin.instructure.com (do NOT include /api/v1).",
+      "required": true
+    },
+    "canvas_api_token": {
+      "type": "string",
+      "title": "Canvas API token",
+      "description": "Generate from Canvas → Account → Settings → New Access Token. Required scopes depend on usage — full account access is needed for the account-scoped tools and grading writes. Stored locally; never sent anywhere except your Canvas host.",
+      "required": true,
+      "sensitive": true
+    },
+    "canvas_account_id": {
+      "type": "string",
+      "title": "Canvas account id (optional, admin only)",
+      "description": "Default account_id for list_account_courses / list_account_users. Use 'self' for the token-owner's account, or a numeric id. Leave blank if you don't have account-admin scope.",
+      "required": false,
+      "default": "self"
+    },
+    "school_config": {
+      "type": "file",
+      "title": "School config JSON (optional)",
+      "description": "Path to a school preset. For Franklin School, set to ${__dirname}/configs/franklin.json. For another school, copy ${__dirname}/configs/example.json and edit. Leave blank to run with no competency framework.",
+      "required": false
+    },
+    "anon_map_dir": {
+      "type": "directory",
+      "title": "Anonymization map directory (optional)",
+      "description": "Where per-course pseudonym maps live. Defaults to ~/.canvas-mcp/anon-maps/. Point at a synced folder (iCloud Drive, Dropbox, NAS) to keep pseudonyms stable across machine loss — losing this directory orphans every Student N pseudonym referenced in past narratives, portfolios, and transition reports.",
+      "required": false
+    },
+    "allow_deanonymize": {
+      "type": "string",
+      "title": "Allow de-anonymized output (default OFF)",
+      "description": "When 'true', tools may return real student names when the caller passes anonymous: false. Otherwise the server forces anonymization even if requested. Set to 'true' only for explicit real-name workflows; flip back to blank or 'false' immediately after. Restart Claude Desktop after changing.",
+      "required": false,
+      "default": "false"
+    },
+    "ts_sandbox_block_outbound": {
+      "type": "string",
+      "title": "Block execute_typescript outbound network (default ON)",
+      "description": "When 'true' (default), user code in execute_typescript can only reach hosts in the allowlist. Set to 'false' to disable the network guard — not recommended unless you understand the prompt-injection risk.",
+      "required": false,
+      "default": "true"
+    },
+    "ts_sandbox_allowlist_hosts": {
+      "type": "string",
+      "title": "execute_typescript host allowlist (optional)",
+      "description": "Comma-separated hostnames user code may reach. The Canvas host is automatically added when this is blank. Add others (e.g., 'api.openai.com,api.github.com') only if a workflow legitimately needs them.",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "runtimes": {
+      "node": ">=20"
+    }
+  }
+}

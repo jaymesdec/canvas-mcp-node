@@ -1,5 +1,6 @@
 node_modules/
 dist/
+build/
 .env
 .env.local
 *.log
@@ -7,6 +8,7 @@ dist/
 coverage/
 .vitest/
 submissions/
+*.mcpb
 
 # execute_typescript temp files (worker should clean these up; this is a
 # belt-and-braces safety net so a worker that crashed mid-execution can't

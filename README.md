@@ -2,7 +2,40 @@
 
 Node + TypeScript MCP server for Canvas LMS. Replaces the Python `canvas-mcp-fork` for the 29 Canvas tools used by the Franklin School `teaching-AIssitant` skills. The full project README ships with Unit 6.1 (tool reference, anonymization durability, Claude Desktop config snippet, security guidance). This file is a minimal stub so the project is shippable end-to-end during Phase 1.
 
-## Install (developer)
+## Install — one-click (.mcpb)
+
+The fastest path is the bundled `.mcpb` installer. Claude Desktop opens it and walks the user through every required env var.
+
+### For end-users (you have a .mcpb file)
+
+1. Double-click `canvas-mcp-<version>.mcpb` (or drag it onto Claude Desktop).
+2. In the install dialog, fill in:
+   - **Canvas API URL** — your Canvas base URL, e.g. `https://franklin.instructure.com` (no `/api/v1`).
+   - **Canvas API token** — generated from Canvas → Account → Settings → New Access Token. Stored locally; only ever sent to the Canvas host above.
+   - **Canvas account id** — `self` if you have account-admin (most Franklin teachers do); leave blank if you don't. Lets account-scoped tools work without passing the id on every call.
+   - **School config JSON** — for Franklin defaults, set to `${__dirname}/configs/franklin.json` (Claude Desktop substitutes the bundle's install path for `${__dirname}`). For another school, copy `configs/example.json` out of the unpacked bundle, edit it, and point this at your edited copy. Leave blank to run with no competency framework.
+   - **Anonymization map directory** — leave blank for the default `~/.canvas-mcp/anon-maps/`, or point at a synced folder (iCloud Drive, Dropbox, NAS) if you want pseudonyms to survive machine loss. **This matters** — losing this directory orphans every `Student N` reference in your past narratives, council reviews, and transition reports.
+   - **Allow de-anonymized output** — leave `false`. Flip to `true` only for explicit real-name workflows; flip back immediately after. Restart Claude Desktop after changing.
+   - **execute_typescript network controls** — leave the defaults. The Canvas host is auto-allowlisted; add others only if a workflow legitimately needs them.
+3. Restart Claude Desktop. The tools appear under the `canvas-mcp` prefix.
+
+### Building your own .mcpb
+
+```bash
+npm install
+npm run build:mcpb
+# → build/mcpb/canvas-mcp-<version>.mcpb
+```
+
+The build:
+
+- Compiles TypeScript to `dist/`.
+- Stages `dist/` as `server/`, copies `configs/`, runs `npm ci --omit=dev` so only production dependencies ship in `node_modules/`.
+- Calls `mcpb pack` to produce a signed-able ZIP at `build/mcpb/canvas-mcp-<version>.mcpb`.
+
+`npm run validate:manifest` validates `manifest.json` against the latest MCPB schema (use this when you edit the manifest).
+
+## Install — developer (source checkout)
 
 ```bash
 npm install
