@@ -12,6 +12,7 @@ import { registerQuizTools } from "./tools/quizzes.js";
 import { registerAssignmentTools } from "./tools/assignments.js";
 import { registerRubricTools } from "./tools/rubrics.js";
 import { registerUserTools } from "./tools/users.js";
+import { registerSubmissionTools } from "./tools/submissions.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   registerAssignmentTools(server, canvas, anonymizer);
   registerRubricTools(server, canvas);
   registerUserTools(server, canvas, anonymizer);
+  registerSubmissionTools(server, canvas, anonymizer);
   registerAnonymizationTools(server, canvas, anonymizer);
 
   const transport = new StdioServerTransport();
