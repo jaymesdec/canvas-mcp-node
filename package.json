@@ -1,0 +1,33 @@
+{
+  "name": "canvas-mcp-node",
+  "version": "0.1.0",
+  "description": "Node + TypeScript MCP server for Canvas LMS (Franklin School teaching ecosystem)",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "canvas-mcp-node": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.3",
+    "axios": "^1.6.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
