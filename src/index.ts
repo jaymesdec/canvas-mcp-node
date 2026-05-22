@@ -3,8 +3,19 @@ import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import { CanvasClient } from "./canvasClient.js";
+import { Anonymizer } from "./anonymizer.js";
+import { registerCourseTools } from "./tools/courses.js";
+import { registerModuleTools } from "./tools/modules.js";
+import { registerPageTools } from "./tools/pages.js";
+import { registerQuizTools } from "./tools/quizzes.js";
+import { registerAssignmentTools } from "./tools/assignments.js";
+import { registerRubricTools } from "./tools/rubrics.js";
+import { registerUserTools } from "./tools/users.js";
+import { registerAnonymizationTools } from "./tools/anonymization.js";
+
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -18,17 +29,32 @@ function requireEnv(name: string): string {
 }
 
 async function main(): Promise<void> {
-  // Validate required env up front. Logs go to stderr — stdout is the JSON-RPC channel.
-  requireEnv("CANVAS_API_URL");
-  requireEnv("CANVAS_API_TOKEN");
+  const canvasApiUrl = requireEnv("CANVAS_API_URL");
+  const canvasApiToken = requireEnv("CANVAS_API_TOKEN");
+
+  const canvas = new CanvasClient({
+    baseUrl: canvasApiUrl,
+    apiToken: canvasApiToken,
+  });
+
+  const anonymizer = new Anonymizer();
+  await anonymizer.init();
 
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
   });
 
-  // Tool registrations land here as later units complete (1.2 → CanvasClient,
-  // 2.x → typed tools, 4.x → anonymization, 5.x → execute_typescript).
+  // Phase 2 tools — anonymizer is wired into every student-data tool before
+  // those tools become callable (FERPA gate per plan).
+  registerCourseTools(server, canvas);
+  registerModuleTools(server, canvas);
+  registerPageTools(server, canvas);
+  registerQuizTools(server, canvas);
+  registerAssignmentTools(server, canvas, anonymizer);
+  registerRubricTools(server, canvas);
+  registerUserTools(server, canvas, anonymizer);
+  registerAnonymizationTools(server, canvas, anonymizer);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
