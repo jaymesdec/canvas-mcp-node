@@ -7,3 +7,10 @@ dist/
 coverage/
 .vitest/
 submissions/
+
+# execute_typescript temp files (worker should clean these up; this is a
+# belt-and-braces safety net so a worker that crashed mid-execution can't
+# leak temp .ts files into commits).
+src/code_api/__user_*.ts
+dist/code_api/__user_*.js
+dist/code_api/__user_*.ts
