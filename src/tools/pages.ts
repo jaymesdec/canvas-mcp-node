@@ -17,13 +17,36 @@ const GET_PAGE_CONTENT_INPUT = {
 const CREATE_PAGE_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   title: z.string(),
-  body: z.string().describe("Page body, HTML. Will be wrapped in the school's page template unless template='none'."),
+  body: z
+    .string()
+    .optional()
+    .describe(
+      "Page body HTML used for single-slot templates (filled into the {{body}} token). For multi-slot templates like 'lesson', pass `slots` instead.",
+    ),
+  slots: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Named content for multi-slot templates. Keys map to {{slot:NAME}} tokens in the template HTML. Discover slot names via list_page_templates.",
+    ),
   editing_roles: z.string().optional().describe("Canvas editing_roles string (e.g., 'teachers,students')."),
   template: z
     .string()
     .optional()
     .describe(
-      "Named page template from the school config (e.g., 'lesson', 'assessment', 'default'). Omit to apply the school's 'default' template if configured. Pass 'none' to skip wrapping entirely. Use list_page_templates to discover what's available.",
+      "Named page template from the school config (e.g., 'lesson', 'assessment', 'default'). Omit to apply 'default'. Pass 'none' to skip wrapping. Use list_page_templates to discover what's available.",
+    ),
+  include_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Force-add optional sections that are default-omit (e.g., ['discussion']). Discover section names via list_page_templates.",
+    ),
+  omit_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Force-remove sections that are default-include (e.g., ['assessment']). Discover section names via list_page_templates.",
     ),
 };
 
@@ -45,10 +68,21 @@ interface CanvasPageLite {
   html_url?: string;
 }
 
-/** Strip the body field from a Canvas page response so it doesn't burn Claude tokens echoing the wrapped HTML back. */
+interface CanvasCourseLite {
+  id: number;
+  name?: string;
+  course_code?: string;
+}
+
 function trimResponseBody(page: CanvasPageLite): Omit<CanvasPageLite, "body"> & { body_omitted: true } {
   const { body: _body, ...rest } = page;
   return { ...rest, body_omitted: true };
+}
+
+/** Derive https://<host>/courses/<id> from CANVAS_API_URL + course id. */
+function deriveCourseUrl(canvas: CanvasClient, courseId: number): string {
+  const base = canvas.baseUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${base}/courses/${courseId}`;
 }
 
 export function registerPageTools(
@@ -110,20 +144,56 @@ export function registerPageTools(
     "create_page",
     {
       description:
-        "Create a Canvas wiki page. published is forced false per Franklin School cross-project rule — teacher publishes after review. By default the school's 'default' page template is applied to the body; pass template='lesson' / 'assessment' / etc. to apply a specific named template, or template='none' to skip wrapping.",
+        "Create a Canvas wiki page. published is forced false per Franklin School cross-project rule — teacher publishes after review. " +
+        "Body is wrapped in the school's 'default' page template by default; pass template='lesson' / 'assessment' / etc. to choose a specific named template, or template='none' to skip wrapping. " +
+        "Multi-slot templates (like 'lesson') need content via slots={about: ..., concepts: ..., ...}; discover slot names via list_page_templates. " +
+        "include_sections / omit_sections override the template's default optional-section state per-call.",
       inputSchema: CREATE_PAGE_INPUT,
     },
     async (input) => {
       const args = input as {
         course_identifier: string | number;
         title: string;
-        body: string;
+        body?: string;
+        slots?: Record<string, string>;
         editing_roles?: string;
         template?: string;
+        include_sections?: string[];
+        omit_sections?: string[];
       };
       return safeHandler("create_page", async () => {
         const courseId = await canvas.resolveCourseId(args.course_identifier);
-        const application = applyPageTemplate(schoolConfig, args.body, args.title, args.template);
+
+        // Fetch course.name only when the chosen template actually needs it.
+        // Saves an API call per create_page when the template doesn't use {{course_name}}.
+        let courseName: string | undefined;
+        const templateName = args.template ?? "default";
+        const chosenTemplate = schoolConfig?.pageTemplates?.[templateName];
+        if (chosenTemplate?.html.includes("{{course_name}}")) {
+          try {
+            const course = await canvas.get<CanvasCourseLite>(`/api/v1/courses/${courseId}`);
+            courseName = course.name;
+          } catch {
+            // ignore; the {{course_name}} token will substitute as empty
+          }
+        }
+
+        const application = applyPageTemplate(
+          schoolConfig,
+          {
+            title: args.title,
+            body: args.body,
+            slots: args.slots,
+            courseName,
+            courseId,
+            courseUrl: deriveCourseUrl(canvas, courseId),
+          },
+          args.template,
+          {
+            includeSections: args.include_sections,
+            omitSections: args.omit_sections,
+          },
+        );
 
         const wikiPagePayload: Record<string, unknown> = {
           title: args.title,
@@ -141,11 +211,14 @@ export function registerPageTools(
           ...trimResponseBody(created),
           template_applied: application.appliedTemplate,
         };
+        if (application.includedSections.length > 0) responsePayload.included_sections = application.includedSections;
+        if (application.omittedSections.length > 0) responsePayload.omitted_sections = application.omittedSections;
         if (application.warnings.length > 0) responsePayload.warnings = application.warnings;
 
         const summary =
           `Created draft page "${created.title}" (slug: ${created.url})` +
           (application.appliedTemplate ? `, template: ${application.appliedTemplate}` : ", no template") +
+          (application.omittedSections.length > 0 ? `, omitted: ${application.omittedSections.join(", ")}` : "") +
           ".";
         return jsonResult(responsePayload, { summary });
       });
@@ -188,7 +261,7 @@ export function registerPageTools(
     "list_page_templates",
     {
       description:
-        "List the named page templates configured in the school config. Returns template names and descriptions only — not the full HTML, to keep Claude's context light. Use the returned names with create_page(template: '<name>').",
+        "List the named page templates configured in the school config — including their slot names (multi-section content holes) and optional sections (default include/omit state). Returns names + descriptions only; the full HTML stays server-side to keep Claude's context light.",
       inputSchema: {},
     },
     async () => {
@@ -206,11 +279,28 @@ export function registerPageTools(
             { summary: "No page templates configured." },
           );
         }
-        const entries = Object.entries(templates).map(([name, template]) => ({
-          name,
-          description: template.description ?? null,
-          is_default: name === "default",
-        }));
+        const entries = Object.entries(templates).map(([name, template]) => {
+          const slots = template.slots
+            ? Object.entries(template.slots).map(([slotName, meta]) => ({
+                name: slotName,
+                description: meta.description ?? null,
+              }))
+            : [];
+          const sections = template.sections
+            ? Object.entries(template.sections).map(([sectionName, meta]) => ({
+                name: sectionName,
+                description: meta.description ?? null,
+                default: meta.default,
+              }))
+            : [];
+          return {
+            name,
+            description: template.description ?? null,
+            is_default: name === "default",
+            slots,
+            sections,
+          };
+        });
         return jsonResult(
           {
             configured: true,
@@ -218,7 +308,9 @@ export function registerPageTools(
             templates: entries,
             default_applied_automatically: Boolean(templates.default),
             usage_hint:
-              "Pass template: '<name>' to create_page to use a specific template. Omit the template arg to apply 'default' if configured. Pass template: 'none' to bypass wrapping.",
+              "create_page(template: '<name>', slots: {...}, include_sections: [...], omit_sections: [...]). " +
+              "For multi-slot templates, populate slots with one entry per slot name from the template's `slots` list. " +
+              "Optional sections obey their default include/omit state unless override arrays say otherwise.",
           },
           { summary: `${entries.length} page template(s) configured: ${entries.map((entry) => entry.name).join(", ")}.` },
         );

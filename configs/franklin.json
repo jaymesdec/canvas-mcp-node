@@ -60,8 +60,27 @@
       "html": "<!-- TODO(franklin): replace with the real Franklin generic-page header HTML. Use {{title}} and {{body}} as tokens. -->\n<div class=\"franklin-page\">\n  <header class=\"franklin-page-header\">\n    <h1>{{title}}</h1>\n  </header>\n  <main class=\"franklin-page-body\">\n    {{body}}\n  </main>\n</div>"
     },
     "lesson": {
-      "description": "Lesson page layout. Used for Canvas pages that walk a class through a single lesson.",
-      "html": "<!-- TODO(franklin): replace with the real Franklin lesson-page template HTML. Use {{title}} and {{body}} as tokens. -->\n<div class=\"franklin-lesson\">\n  <header class=\"franklin-lesson-header\">\n    <h1>{{title}}</h1>\n  </header>\n  <section class=\"franklin-lesson-body\">\n    {{body}}\n  </section>\n</div>"
+      "description": "Franklin lesson page layout. Banner with course name + page title, school logo, course nav strip, two intro blocks ('students will learn about' / 'will learn to'), and 5 accordion panels.",
+      "html": "<div id=\"kl_wrapper_3\" class=\"kl_flat_sections kl_wrapper\">\n  <div id=\"kl_banner\" class=\"\">\n    <h2 class=\"\"><span id=\"kl_banner_left\" class=\"\">{{course_name}}</span> <span id=\"kl_banner_right\">{{title}}</span></h2>\n  </div>\n  <div id=\"kl_banner_image\" class=\"\">\n    <img class=\"kl_image_full_width\" style=\"width: 100%; height: auto; max-width: 100%;\" src=\"https://franklinjc.test.instructure.com/courses/413/files/20996/download\" alt=\"Franklin School logo\" data-api-endpoint=\"https://franklinjc.test.instructure.com/api/v1/courses/413/files/20996\" data-api-returntype=\"File\" />\n  </div>\n  <div id=\"kl_navigation\" class=\"\">\n    <ul class=\"kl_nav_list_1\">\n      <li id=\"kl_nav_item_0\"><a href=\"{{course_url}}/pages/start-here\"><i class=\"icon-forward\" aria-hidden=\"true\"><span class=\"dp-icon-content\" style=\"display: none;\">&nbsp;</span></i> Start Here</a></li>\n      <li id=\"kl_nav_item_1\"><a href=\"{{course_url}}/assignments/syllabus\"><i class=\"icon-syllabus\" aria-hidden=\"true\"><span class=\"dp-icon-content\" style=\"display: none;\">&nbsp;</span></i> Syllabus</a></li>\n      <li id=\"kl_nav_item_2\"><a href=\"{{course_url}}/modules\"><i class=\"icon-module\" aria-hidden=\"true\"><span class=\"dp-icon-content\" style=\"display: none;\">&nbsp;</span></i> Modules</a></li>\n      <li id=\"kl_nav_item_3\"><a href=\"{{course_url}}/pages/more-resources\"><i class=\"icon-plus\" aria-hidden=\"true\"><span class=\"dp-icon-content\" style=\"display: none;\">&nbsp;</span></i> More Resources</a></li>\n    </ul>\n  </div>\n  <div id=\"kl_custom_block_0\" class=\"\">\n    <h3>In this lesson students will learn about</h3>\n    {{slot:about}}\n  </div>\n  <div id=\"kl_custom_block_1\" class=\"\">\n    <h3>In this lesson students will learn to</h3>\n    {{slot:to}}\n  </div>\n  <div id=\"kl_panel_block_0\" class=\"\">\n    <div class=\"kl_panels_wrapper kl_panels_accordion\">\n      <h3 id=\"kl_panel_0\" class=\"kl_panel_heading kl_panel_0\">Key Concepts/Terms</h3>\n      <div id=\"kl_panel_0_content\" class=\"kl_panel_content kl_panel_0\">\n        {{slot:concepts}}\n      </div>\n      <h3 id=\"kl_panel_1\" class=\"kl_panel_heading kl_panel_1\">Lesson Resources</h3>\n      <div id=\"kl_panel_1_content\" class=\"kl_panel_content kl_panel_1\">\n        {{slot:resources}}\n      </div>\n      <h3 id=\"kl_panel_2\" class=\"kl_panel_heading kl_panel_2\">Class Tasks</h3>\n      <div id=\"kl_panel_2_content\" class=\"kl_panel_content kl_panel_2\">\n        {{slot:tasks}}\n      </div>\n      <!-- SECTION:discussion -->\n      <h3 id=\"kl_panel_3\" class=\"kl_panel_heading kl_panel_3\">Discussion Forum</h3>\n      <div id=\"kl_panel_3_content\" class=\"kl_panel_content kl_panel_3\">\n        {{slot:discussion}}\n      </div>\n      <!-- /SECTION:discussion -->\n      <!-- SECTION:assessment -->\n      <h3 id=\"kl_panel_4\" class=\"kl_panel_heading kl_panel_4\">Link to Related Assessment</h3>\n      <div id=\"kl_panel_4_content\" class=\"kl_panel_content kl_panel_4\">\n        {{slot:assessment}}\n      </div>\n      <!-- /SECTION:assessment -->\n    </div>\n  </div>\n</div>",
+      "slots": {
+        "about": { "description": "What students will learn about (the topic / content). 1-2 sentence summary." },
+        "to": { "description": "What skills students will gain — typically a short bulleted list of can-do statements." },
+        "concepts": { "description": "Key concepts and terms with brief definitions." },
+        "resources": { "description": "Links to readings, videos, websites, or other materials referenced in the lesson." },
+        "tasks": { "description": "Tasks for students to complete during the lesson." },
+        "discussion": { "description": "Discussion forum link or prompt. Only used when a discussion forum is part of the lesson." },
+        "assessment": { "description": "Link to a related assessment task (when there is one)." }
+      },
+      "sections": {
+        "discussion": {
+          "default": "omit",
+          "description": "Discussion forum accordion. Off by default — most lessons don't use one. Pass include_sections: ['discussion'] when the teacher mentions a discussion or debate."
+        },
+        "assessment": {
+          "default": "include",
+          "description": "Linked-assessment accordion. On by default — most lessons either have a related assessment or expect one will be added later. Pass omit_sections: ['assessment'] for purely formative lessons."
+        }
+      }
     },
     "assessment": {
       "description": "Assessment page layout. Used for Canvas pages that describe a graded assignment, project, or rubric-aligned task.",

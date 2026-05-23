@@ -29,6 +29,32 @@ const templatedConfig: SchoolConfig = {
       description: "Header without a body token — body should append.",
       html: "<header>{{title}}</header>",
     },
+    multiSlot: {
+      description: "Template with named slots and conditional sections",
+      html:
+        "<header data-course=\"{{course_name}}\" data-id=\"{{course_id}}\">\n" +
+        "  <a href=\"{{course_url}}/modules\">Modules</a>\n" +
+        "  <h1>{{title}}</h1>\n" +
+        "</header>\n" +
+        "<section class=\"about\">{{slot:about}}</section>\n" +
+        "<section class=\"skills\">{{slot:to}}</section>\n" +
+        "<!-- SECTION:discussion -->\n" +
+        "<section class=\"discussion\">{{slot:discussion}}</section>\n" +
+        "<!-- /SECTION:discussion -->\n" +
+        "<!-- SECTION:assessment -->\n" +
+        "<section class=\"assessment\">{{slot:assessment}}</section>\n" +
+        "<!-- /SECTION:assessment -->",
+      slots: {
+        about: { description: "What the lesson covers" },
+        to: { description: "Skills students gain" },
+        discussion: { description: "Discussion prompt — only when used" },
+        assessment: { description: "Linked assessment" },
+      },
+      sections: {
+        discussion: { default: "omit", description: "Discussion accordion. Off by default." },
+        assessment: { default: "include", description: "Linked assessment accordion. On by default." },
+      },
+    },
   },
 };
 
@@ -284,7 +310,7 @@ describe("registerPageTools", () => {
       const result = (await harness.call("list_page_templates")) as ToolResponse;
       expect(result.isError).toBeFalsy();
       const templates = result.structuredContent?.templates as Array<Record<string, unknown>>;
-      expect(templates.map((entry) => entry.name).sort()).toEqual(["assessment", "default", "headerOnly", "lesson"]);
+      expect(templates.map((entry) => entry.name).sort()).toEqual(["assessment", "default", "headerOnly", "lesson", "multiSlot"]);
       // No 'html' field on any entry — we don't burn tokens echoing back the template HTML.
       for (const entry of templates) {
         expect(entry).not.toHaveProperty("html");
@@ -300,6 +326,153 @@ describe("registerPageTools", () => {
       expect(result.structuredContent?.configured).toBe(false);
       expect(result.structuredContent?.count).toBe(0);
       expect(result.structuredContent?.message).toMatch(/SCHOOL_CONFIG/i);
+    });
+  });
+
+  describe("slots + sections (multi-slot templates)", () => {
+    it("substitutes named slots and built-in course tokens; default-omit sections are stripped", async () => {
+      const { client, requests } = buildMockCanvas([
+        // course details fetch for {{course_name}}
+        { status: 200, data: { id: 60366, name: "Design 9", course_code: "DSGN_9_120251" } },
+        // create_page POST
+        { status: 200, data: { url: "lesson-1", title: "Lesson 1", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Lesson 1",
+        template: "multiSlot",
+        slots: {
+          about: "<p>The water cycle</p>",
+          to: "<ul><li>Diagram a watershed</li></ul>",
+          assessment: "<p>Quiz on Friday</p>",
+        },
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toContain("data-course=\"Design 9\"");
+      expect(payload.body).toContain("data-id=\"60366\"");
+      expect(payload.body).toContain("href=\"https://canvas.example.com/courses/60366/modules\"");
+      expect(payload.body).toContain("<h1>Lesson 1</h1>");
+      expect(payload.body).toContain("<p>The water cycle</p>");
+      expect(payload.body).toContain("<li>Diagram a watershed</li>");
+      // assessment is default-include — should be present
+      expect(payload.body).toContain("<p>Quiz on Friday</p>");
+      expect(payload.body).toContain("class=\"assessment\"");
+      // discussion is default-omit — should NOT be present
+      expect(payload.body).not.toContain("class=\"discussion\"");
+      // SECTION markers themselves should be stripped
+      expect(payload.body).not.toContain("<!-- SECTION:");
+      expect(payload.body).not.toContain("<!-- /SECTION:");
+      // structuredContent surfaces what was included/omitted
+      expect(result.structuredContent?.included_sections).toEqual(["assessment"]);
+      expect(result.structuredContent?.omitted_sections).toEqual(["discussion"]);
+    });
+
+    it("include_sections forces a default-omit section ON", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Debate",
+        template: "multiSlot",
+        slots: { about: "x", to: "x", discussion: "<p>What do you think?</p>" },
+        include_sections: ["discussion"],
+      })) as ToolResponse;
+      const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toContain("class=\"discussion\"");
+      expect(payload.body).toContain("<p>What do you think?</p>");
+      expect(result.structuredContent?.included_sections).toEqual(
+        expect.arrayContaining(["discussion", "assessment"]),
+      );
+    });
+
+    it("omit_sections forces a default-include section OFF", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Formative only",
+        template: "multiSlot",
+        slots: { about: "x", to: "x" },
+        omit_sections: ["assessment"],
+      })) as ToolResponse;
+      const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).not.toContain("class=\"assessment\"");
+      expect(result.structuredContent?.omitted_sections).toEqual(
+        expect.arrayContaining(["assessment", "discussion"]),
+      );
+    });
+
+    it("warns when a template has a slot token but the call doesn't provide content", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Empty Slots",
+        template: "multiSlot",
+        slots: { about: "x" },
+        // 'to' is in the template but not provided — should warn
+      })) as ToolResponse;
+      const warnings = result.structuredContent?.warnings as string[];
+      expect(warnings.some((line) => line.includes("{{slot:to}}"))).toBe(true);
+    });
+
+    it("HTML-escapes the course_name token (defense against malicious course rename)", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: '<img src=x onerror="alert(1)">' } },
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "x",
+        template: "multiSlot",
+        slots: { about: "x", to: "x" },
+      });
+      const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toContain("&lt;img");
+      expect(payload.body).not.toContain('onerror="alert(1)"');
+    });
+
+    it("list_page_templates surfaces slot + section metadata (descriptions only, no HTML)", async () => {
+      const { client } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("list_page_templates")) as ToolResponse;
+      const templates = result.structuredContent?.templates as Array<{
+        name: string;
+        slots: Array<{ name: string; description: string | null }>;
+        sections: Array<{ name: string; default: string }>;
+      }>;
+      const multiSlot = templates.find((entry) => entry.name === "multiSlot")!;
+      expect(multiSlot.slots.map((slot) => slot.name).sort()).toEqual([
+        "about",
+        "assessment",
+        "discussion",
+        "to",
+      ]);
+      expect(multiSlot.sections).toEqual(
+        expect.arrayContaining([
+          { name: "discussion", description: expect.any(String), default: "omit" },
+          { name: "assessment", description: expect.any(String), default: "include" },
+        ]),
+      );
     });
   });
 });

@@ -272,9 +272,15 @@ This keeps the generic-vs-Franklin split clean as the surface grows. Anything in
 
 ### Page templates
 
-Schools often have a consistent institutional look for Canvas pages — Franklin wraps content in a school header/footer; another school might use a different navigation strip. `create_page` automatically wraps the body in a configured template, so every page Claude creates ships with your school's standard look without the teacher having to remember.
+Schools often have a consistent institutional look for Canvas pages — Franklin wraps content in a school header/footer with a banner, school logo, and per-course nav strip; another school might use a different layout. `create_page` automatically wraps the body in a configured template, so every page Claude creates ships with your school's standard look without the teacher having to remember.
 
-Templates are keyed by name and defined in the school config under `pageTemplates`:
+Templates are keyed by name in the school config under `pageTemplates`. Each template has:
+
+- **`html`** — the template HTML with substitution tokens
+- **`slots`** *(optional)* — named content holes used by multi-content templates like `lesson`
+- **`sections`** *(optional)* — optional/conditional accordion sections with default include/omit state
+
+Example: a generic single-content template plus a multi-slot lesson template:
 
 ```jsonc
 {
@@ -284,29 +290,99 @@ Templates are keyed by name and defined in the school config under `pageTemplate
       "html": "<div class=\"school-page\"><h1>{{title}}</h1>{{body}}</div>"
     },
     "lesson": {
-      "description": "Lesson page layout.",
-      "html": "<article class=\"school-lesson\">...<section>{{body}}</section></article>"
-    },
-    "assessment": {
-      "description": "Assessment / graded task layout.",
-      "html": "<article class=\"school-assessment\">...{{body}}</article>"
+      "description": "Lesson page with intro blocks and accordions.",
+      "html": "<header>{{course_name}} — {{title}}</header><section>{{slot:about}}</section>...<!-- SECTION:discussion -->...{{slot:discussion}}...<!-- /SECTION:discussion -->",
+      "slots": {
+        "about":      { "description": "What students will learn about" },
+        "discussion": { "description": "Discussion forum link (only when used)" }
+      },
+      "sections": {
+        "discussion": { "default": "omit", "description": "Discussion accordion. Off by default — pass include_sections to add." }
+      }
     }
   }
 }
 ```
 
-**How it works:**
+**Substitution tokens** (the server fills these in before posting to Canvas):
 
-- `create_page(body: "<p>Hello</p>")` → body wrapped in the `default` template.
-- `create_page(body: "<p>Lesson</p>", template: "lesson")` → body wrapped in the `lesson` template.
-- `create_page(body: "<p>Raw</p>", template: "none")` → no wrapping. Body posted verbatim.
-- Templates use `{{title}}` and `{{body}}` as substitution tokens. `{{title}}` is HTML-escaped before substitution. If a template omits `{{body}}`, the body is appended after the template (useful for header-only templates).
+| Token | Filled with |
+|---|---|
+| `{{title}}` | The page's title (HTML-escaped) |
+| `{{body}}` | The `body` arg to `create_page` (legacy single-slot) |
+| `{{slot:NAME}}` | The value at `slots[NAME]` in the call |
+| `{{course_name}}` | Canvas `course.name`. Fetched only when the template references this token. (HTML-escaped.) |
+| `{{course_id}}` | Numeric course id |
+| `{{course_url}}` | `https://<your-canvas-host>/courses/<course_id>` |
 
-**Where the work happens:** template substitution runs **inside the MCP server**, not in Claude's context. The template HTML never enters the conversation — Claude passes a body string, the server wraps it, posts to Canvas. This keeps token cost flat regardless of how large the template is. Symmetrically, `create_page` strips the body from its response (returning the URL, slug, and metadata only) so a freshly-wrapped page doesn't burn tokens on the way back either.
+**How `create_page` chooses what to wrap:**
 
-**Discovering what's available:** `list_page_templates` returns the configured names + descriptions (not the full HTML). Skills use it to pick the right template for a content type.
+```
+create_page(body: "<p>Hello</p>")                           // → "default" template
+create_page(body: "<p>x</p>", template: "lesson")           // → "lesson" template
+create_page(template: "lesson", slots: {about: "...", ...}) // → multi-slot
+create_page(body: "<p>x</p>", template: "none")             // → no wrap
+```
+
+**Optional sections (the `include_sections` / `omit_sections` mechanism):**
+
+Wrap conditional accordion blocks in `<!-- SECTION:name -->...<!-- /SECTION:name -->` markers. The config declares each section's default state:
+
+- `default: "include"` → section is present unless `omit_sections: ["name"]` is passed
+- `default: "omit"` → section is absent unless `include_sections: ["name"]` is passed
+
+Section markers are stripped from the final HTML; their content is either kept (included) or removed (omitted). Section names that appear in `include_sections` / `omit_sections` but aren't declared in the config are silently ignored.
+
+**Where the work happens (token-cost note):** template substitution runs **inside the MCP server**, not in Claude's context. The template HTML never enters the conversation — Claude passes slots + flags, the server wraps everything, posts to Canvas. This keeps token cost flat regardless of how large the template is. Symmetrically, `create_page` strips the body from its response (returning URL, slug, metadata, `template_applied`, `included_sections`, `omitted_sections`) so a freshly-wrapped page doesn't burn tokens on the way back.
+
+**Discovering what's available:** `list_page_templates` returns the configured templates with their slot names + descriptions and section names + defaults + descriptions. (Never the full HTML.) Skills call it to know what slots to fill and which sections might need to be toggled.
 
 **Adding more templates:** any string key works (`"weekly_recap"`, `"unit_overview"`, etc.). The names `"default"`, `"lesson"`, and `"assessment"` are conventions, not requirements.
+
+#### Lesson template (Franklin preset)
+
+The bundled Franklin lesson template (`configs/franklin.json` → `pageTemplates.lesson`) defines:
+
+**Slots** (all populated by the planning skill):
+
+| Slot | Purpose |
+|---|---|
+| `about` | What students will learn about (1–2 sentence topic summary) |
+| `to` | What skills students will gain (typically a bulleted list of can-do statements) |
+| `concepts` | Key concepts and terms with brief definitions |
+| `resources` | Links to readings, videos, websites, other materials |
+| `tasks` | Tasks for students to complete during the lesson |
+| `discussion` | Discussion forum link / prompt (only used when the section is included) |
+| `assessment` | Link to a related assessment task |
+
+**Sections** (override per-call with `include_sections` / `omit_sections`):
+
+| Section | Default | When to toggle |
+|---|---|---|
+| `discussion` | omit | Include when the teacher mentions a discussion, debate, or forum prompt |
+| `assessment` | include | Omit for purely formative lessons with no graded task to link |
+
+**Per-course tokens** the lesson template uses: `{{course_name}}`, `{{course_url}}`, `{{title}}`. The course nav strip (Start Here, Syllabus, Modules, More Resources) is templated via `{{course_url}}` so the same template works across every course without re-uploading.
+
+Example call from a `plan-lesson` skill:
+
+```
+create_page(
+  course_identifier: "DSGN_9_120251",
+  title: "The Water Cycle",
+  template: "lesson",
+  slots: {
+    about: "<p>The water cycle and watershed geography.</p>",
+    to: "<ul><li>Diagram a local watershed</li><li>Explain evapotranspiration</li></ul>",
+    concepts: "<p><strong>Watershed:</strong> ...</p>",
+    resources: "<ul><li>USGS watershed tool</li></ul>",
+    tasks: "<ol><li>Map your home watershed</li></ol>",
+    assessment: "<p>See the watershed quiz, due Friday.</p>"
+  }
+)
+```
+
+To add a discussion accordion to that lesson, pass `include_sections: ["discussion"]` and fill `slots.discussion`. The response includes `included_sections` and `omitted_sections` arrays so Claude can confirm what landed in the page.
 
 ### What is *not* in the school config (intentionally)
 

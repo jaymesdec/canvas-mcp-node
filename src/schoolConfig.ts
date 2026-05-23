@@ -27,6 +27,25 @@ const CompetencyFrameworkSchema = z.object({
   competencies: z.array(CompetencySchema).min(1),
 });
 
+const SlotMetaSchema = z.object({
+  description: z
+    .string()
+    .optional()
+    .describe(
+      "What content goes in this slot. Surfaced to Claude via list_page_templates so the planning skill knows what to generate.",
+    ),
+});
+
+const SectionMetaSchema = z.object({
+  description: z.string().optional(),
+  default: z
+    .enum(["include", "omit"])
+    .default("include")
+    .describe(
+      "Whether this section is present by default. 'include' = on unless omit_sections asks otherwise; 'omit' = off unless include_sections asks otherwise.",
+    ),
+});
+
 const PageTemplateSchema = z.object({
   description: z
     .string()
@@ -38,7 +57,19 @@ const PageTemplateSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Template HTML. Use {{title}} and {{body}} tokens where the page title and body content should be injected. If {{body}} is missing, the body is appended after the template (useful for header-only templates).",
+      "Template HTML. Use {{title}}, {{course_name}}, {{course_id}}, {{course_url}}, {{slot:NAME}}, and {{body}} tokens (which the server substitutes per-call). Use <!-- SECTION:NAME --> ... <!-- /SECTION:NAME --> markers around optional accordions or blocks.",
+    ),
+  slots: z
+    .record(z.string(), SlotMetaSchema)
+    .optional()
+    .describe(
+      "Named content slots in this template. Each entry corresponds to a {{slot:NAME}} token in the HTML. Surfacing them lets Claude know what content to generate without seeing the full template.",
+    ),
+  sections: z
+    .record(z.string(), SectionMetaSchema)
+    .optional()
+    .describe(
+      "Optional/conditional sections wrapped in <!-- SECTION:NAME --> markers. Each entry sets a default include/omit state; per-call create_page args (include_sections / omit_sections) override.",
     ),
 });
 
@@ -64,45 +95,75 @@ export type CompetencyFramework = z.infer<typeof CompetencyFrameworkSchema>;
 export type PageTemplate = z.infer<typeof PageTemplateSchema>;
 export type SchoolConfig = z.infer<typeof SchoolConfigSchema>;
 
+export interface TemplateContext {
+  title: string;
+  /** Body content used to fill the implicit {{body}} token (and the slots.body entry if not otherwise set). */
+  body?: string;
+  /** Named slots used to fill {{slot:NAME}} tokens. */
+  slots?: Record<string, string>;
+  /** Course context, substituted into {{course_name}}, {{course_id}}, {{course_url}}. */
+  courseName?: string;
+  courseId?: number;
+  courseUrl?: string;
+}
+
+export interface TemplateOverrides {
+  /** Section names forced on (overrides default: omit). */
+  includeSections?: string[];
+  /** Section names forced off (overrides default: include). */
+  omitSections?: string[];
+}
+
 export interface TemplateApplication {
-  /** The resulting body to POST to Canvas. */
   body: string;
-  /** Which template was applied (e.g., "default", "lesson"), or null if none. */
   appliedTemplate: string | null;
-  /** Non-fatal warnings (e.g., "{{body}} missing — appended at end"). */
+  includedSections: string[];
+  omittedSections: string[];
   warnings: string[];
 }
 
 /**
- * Apply a named page template to `body`, using `{{title}}` and `{{body}}` as
- * substitution tokens. Returns the body unchanged when no template is configured
- * or `templateName` is "none".
+ * Apply a named page template, processing optional sections and substituting
+ * built-in tokens, slot tokens, and the legacy {{body}}/{{title}} tokens.
  *
- * Lookup rules:
- *   - templateName === "none"         → no wrap (returns body verbatim)
- *   - templateName === undefined      → uses "default" if configured, else no wrap
- *   - templateName === "<other>"      → uses that named template, throws if missing
+ * Template lookup:
+ *   - templateName === "none"     → no wrap (returns body verbatim)
+ *   - templateName === undefined  → "default" if configured, else no wrap
+ *   - templateName === "<other>"  → that named template, throws if missing
+ *
+ * Section processing (only applies when a template is in use):
+ *   - For each section declared in template.sections, decide include vs omit:
+ *     include if (default === "include" AND not in omitSections) OR in includeSections
+ *     omit if (default === "omit" AND not in includeSections) OR in omitSections
+ *   - Omitted sections: their <!-- SECTION:NAME --> ... <!-- /SECTION:NAME --> block is stripped.
+ *   - Included sections: just the markers are stripped; their content stays.
+ *   - Any leftover SECTION markers (sections not declared in config) are stripped as markers only.
+ *
+ * Token substitution order: sections → slots → built-ins ({{body}}, {{title}}, {{course_*}}).
  */
 export function applyPageTemplate(
   schoolConfig: SchoolConfig | null,
-  body: string,
-  title: string,
+  context: TemplateContext,
   templateName?: string,
+  overrides: TemplateOverrides = {},
 ): TemplateApplication {
-  if (templateName === "none") {
-    return { body, appliedTemplate: null, warnings: [] };
-  }
+  const body = context.body ?? context.slots?.body ?? "";
+  const result: TemplateApplication = {
+    body,
+    appliedTemplate: null,
+    includedSections: [],
+    omittedSections: [],
+    warnings: [],
+  };
+
+  if (templateName === "none") return result;
   const templates = schoolConfig?.pageTemplates;
-  if (!templates || Object.keys(templates).length === 0) {
-    return { body, appliedTemplate: null, warnings: [] };
-  }
+  if (!templates || Object.keys(templates).length === 0) return result;
+
   const name = templateName ?? "default";
   const template = templates[name];
   if (!template) {
-    if (templateName === undefined) {
-      // Caller didn't ask for one; "default" simply isn't configured.
-      return { body, appliedTemplate: null, warnings: [] };
-    }
+    if (templateName === undefined) return result;
     const available = Object.keys(templates).join(", ");
     throw new Error(
       `Unknown page template "${templateName}". Configured templates: ${available || "(none)"}. ` +
@@ -110,20 +171,75 @@ export function applyPageTemplate(
     );
   }
 
-  const warnings: string[] = [];
   let html = template.html;
-  const hasBodyToken = html.includes("{{body}}");
-  if (hasBodyToken) {
+
+  // --- Section processing ---
+  const declaredSections = template.sections ?? {};
+  const includeSet = new Set(overrides.includeSections ?? []);
+  const omitSet = new Set(overrides.omitSections ?? []);
+  for (const [sectionName, meta] of Object.entries(declaredSections)) {
+    const explicitlyIncluded = includeSet.has(sectionName);
+    const explicitlyOmitted = omitSet.has(sectionName);
+    const shouldInclude =
+      explicitlyIncluded || (meta.default === "include" && !explicitlyOmitted);
+    if (shouldInclude) {
+      result.includedSections.push(sectionName);
+    } else {
+      result.omittedSections.push(sectionName);
+      html = stripSectionBlock(html, sectionName);
+    }
+  }
+  // Strip any leftover SECTION markers (declared-and-kept, or undeclared)
+  html = html.replace(/<!--\s*\/?SECTION:[\w-]+\s*-->\s*/g, "");
+
+  // --- Slot substitution ---
+  const slots: Record<string, string> = { ...(context.slots ?? {}) };
+  if (body !== "" && slots.body === undefined) slots.body = body;
+  const slotTokensInTemplate = new Set<string>();
+  for (const match of template.html.matchAll(/\{\{slot:([\w-]+)\}\}/g)) {
+    slotTokensInTemplate.add(match[1]!);
+  }
+  for (const slotName of slotTokensInTemplate) {
+    const content = slots[slotName] ?? "";
+    html = html.split(`{{slot:${slotName}}}`).join(content);
+    if (slots[slotName] === undefined) {
+      result.warnings.push(`Template "${name}" has slot "{{slot:${slotName}}}" but no content was provided — substituted empty.`);
+    }
+  }
+
+  // --- Built-in tokens ---
+  if (html.includes("{{body}}")) {
     html = html.split("{{body}}").join(body);
-  } else {
-    warnings.push(
+  } else if (body !== "" && !slotTokensInTemplate.has("body") && Object.keys(slotTokensInTemplate).length === 0) {
+    // Pure single-slot legacy template with no {{body}} token and no slots — append.
+    result.warnings.push(
       `Template "${name}" has no {{body}} token; body content was appended after the template HTML.`,
     );
     html = `${html}\n${body}`;
   }
-  // Title substitution is optional. Templates without {{title}} just don't get it.
-  html = html.split("{{title}}").join(escapeHtml(title));
-  return { body: html, appliedTemplate: name, warnings };
+  html = html.split("{{title}}").join(escapeHtml(context.title));
+  if (context.courseName !== undefined) {
+    html = html.split("{{course_name}}").join(escapeHtml(context.courseName));
+  }
+  if (context.courseId !== undefined) {
+    html = html.split("{{course_id}}").join(String(context.courseId));
+  }
+  if (context.courseUrl !== undefined) {
+    html = html.split("{{course_url}}").join(context.courseUrl);
+  }
+
+  result.body = html;
+  result.appliedTemplate = name;
+  return result;
+}
+
+function stripSectionBlock(html: string, sectionName: string): string {
+  const escaped = sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `<!--\\s*SECTION:${escaped}\\s*-->[\\s\\S]*?<!--\\s*/SECTION:${escaped}\\s*-->\\s*`,
+    "g",
+  );
+  return html.replace(pattern, "");
 }
 
 function escapeHtml(input: string): string {
