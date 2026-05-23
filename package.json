@@ -1,6 +1,6 @@
 {
   "name": "canvas-mcp-node",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Node + TypeScript MCP server for Canvas LMS (Franklin School teaching ecosystem)",
   "type": "module",
   "main": "dist/index.js",
