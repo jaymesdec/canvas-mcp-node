@@ -53,5 +53,19 @@
   },
   "academicCalendar": {
     "weeksPerYear": 35
+  },
+  "pageTemplates": {
+    "default": {
+      "description": "Header-only generic wrap for any Canvas wiki page that doesn't fit lesson/assessment. The header markup precedes the body content.",
+      "html": "<!-- TODO(franklin): replace with the real Franklin generic-page header HTML. Use {{title}} and {{body}} as tokens. -->\n<div class=\"franklin-page\">\n  <header class=\"franklin-page-header\">\n    <h1>{{title}}</h1>\n  </header>\n  <main class=\"franklin-page-body\">\n    {{body}}\n  </main>\n</div>"
+    },
+    "lesson": {
+      "description": "Lesson page layout. Used for Canvas pages that walk a class through a single lesson.",
+      "html": "<!-- TODO(franklin): replace with the real Franklin lesson-page template HTML. Use {{title}} and {{body}} as tokens. -->\n<div class=\"franklin-lesson\">\n  <header class=\"franklin-lesson-header\">\n    <h1>{{title}}</h1>\n  </header>\n  <section class=\"franklin-lesson-body\">\n    {{body}}\n  </section>\n</div>"
+    },
+    "assessment": {
+      "description": "Assessment page layout. Used for Canvas pages that describe a graded assignment, project, or rubric-aligned task.",
+      "html": "<!-- TODO(franklin): replace with the real Franklin assessment-page template HTML. Use {{title}} and {{body}} as tokens. -->\n<div class=\"franklin-assessment\">\n  <header class=\"franklin-assessment-header\">\n    <h1>{{title}}</h1>\n  </header>\n  <section class=\"franklin-assessment-body\">\n    {{body}}\n  </section>\n</div>"
+    }
   }
 }

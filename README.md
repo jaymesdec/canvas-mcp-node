@@ -112,8 +112,9 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 |---|---|
 | `list_pages(course_identifier)` | Slug, title, published flag, updated_at. |
 | `get_page_content(course_identifier, page_url)` | Full HTML body + metadata. |
-| `create_page(course_identifier, title, body, editing_roles?)` | Create a wiki page. **`published: false` forced.** |
-| `edit_page_content(course_identifier, page_url, title?, body?, editing_roles?)` | Update an existing page. Only sends fields you pass. |
+| `create_page(course_identifier, title, body, editing_roles?, template?)` | Create a wiki page. **`published: false` forced.** Body is wrapped in the school's `default` page template if configured; pass `template: 'lesson'` / `'assessment'` / `'none'` to override. See "Page templates" below. |
+| `edit_page_content(course_identifier, page_url, title?, body?, editing_roles?)` | Update an existing page. Only sends fields you pass. Does NOT re-apply the template. |
+| `list_page_templates()` | List the named page templates configured in the school config (names + descriptions only, not full HTML). |
 
 ### Quizzes
 
@@ -268,6 +269,44 @@ When a new piece of school-specific data emerges (e.g., a Franklin HTML page tem
 4. Add tests covering both the configured and unconfigured paths.
 
 This keeps the generic-vs-Franklin split clean as the surface grows. Anything in the config is per-school; anything in `src/` outside of `schoolConfig.ts` consumers is generic and shared.
+
+### Page templates
+
+Schools often have a consistent institutional look for Canvas pages — Franklin wraps content in a school header/footer; another school might use a different navigation strip. `create_page` automatically wraps the body in a configured template, so every page Claude creates ships with your school's standard look without the teacher having to remember.
+
+Templates are keyed by name and defined in the school config under `pageTemplates`:
+
+```jsonc
+{
+  "pageTemplates": {
+    "default": {
+      "description": "Header-only generic wrap. Applied when no template is specified.",
+      "html": "<div class=\"school-page\"><h1>{{title}}</h1>{{body}}</div>"
+    },
+    "lesson": {
+      "description": "Lesson page layout.",
+      "html": "<article class=\"school-lesson\">...<section>{{body}}</section></article>"
+    },
+    "assessment": {
+      "description": "Assessment / graded task layout.",
+      "html": "<article class=\"school-assessment\">...{{body}}</article>"
+    }
+  }
+}
+```
+
+**How it works:**
+
+- `create_page(body: "<p>Hello</p>")` → body wrapped in the `default` template.
+- `create_page(body: "<p>Lesson</p>", template: "lesson")` → body wrapped in the `lesson` template.
+- `create_page(body: "<p>Raw</p>", template: "none")` → no wrapping. Body posted verbatim.
+- Templates use `{{title}}` and `{{body}}` as substitution tokens. `{{title}}` is HTML-escaped before substitution. If a template omits `{{body}}`, the body is appended after the template (useful for header-only templates).
+
+**Where the work happens:** template substitution runs **inside the MCP server**, not in Claude's context. The template HTML never enters the conversation — Claude passes a body string, the server wraps it, posts to Canvas. This keeps token cost flat regardless of how large the template is. Symmetrically, `create_page` strips the body from its response (returning the URL, slug, and metadata only) so a freshly-wrapped page doesn't burn tokens on the way back either.
+
+**Discovering what's available:** `list_page_templates` returns the configured names + descriptions (not the full HTML). Skills use it to pick the right template for a content type.
+
+**Adding more templates:** any string key works (`"weekly_recap"`, `"unit_overview"`, etc.). The names `"default"`, `"lesson"`, and `"assessment"` are conventions, not requirements.
 
 ### What is *not* in the school config (intentionally)
 

@@ -20,7 +20,7 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.3.4";
+const SERVER_VERSION = "0.3.5";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   // those tools become callable (FERPA gate per plan).
   registerCourseTools(server, canvas);
   registerModuleTools(server, canvas);
-  registerPageTools(server, canvas);
+  registerPageTools(server, canvas, schoolConfig);
   registerQuizTools(server, canvas);
   registerAssignmentTools(server, canvas, anonymizer);
   registerRubricTools(server, canvas);

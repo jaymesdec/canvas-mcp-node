@@ -27,15 +27,30 @@ const CompetencyFrameworkSchema = z.object({
   competencies: z.array(CompetencySchema).min(1),
 });
 
+const PageTemplateSchema = z.object({
+  description: z
+    .string()
+    .optional()
+    .describe(
+      "What this template is for, in a sentence. Surfaced by list_page_templates so Claude can pick the right one without seeing the HTML.",
+    ),
+  html: z
+    .string()
+    .min(1)
+    .describe(
+      "Template HTML. Use {{title}} and {{body}} tokens where the page title and body content should be injected. If {{body}} is missing, the body is appended after the template (useful for header-only templates).",
+    ),
+});
+
 export const SchoolConfigSchema = z.object({
   schoolName: z.string().optional().describe("Human-readable school name, used in summaries."),
   competencyFramework: CompetencyFrameworkSchema.optional(),
-  /**
-   * Reserved for future use. The MCP core does not consume these yet, but
-   * they're carved out so adding them later doesn't require renaming
-   * fields under schools.
-   */
-  pageTemplates: z.record(z.string(), z.string()).optional(),
+  pageTemplates: z
+    .record(z.string(), PageTemplateSchema)
+    .optional()
+    .describe(
+      "Named HTML wrappers for Canvas wiki pages. A 'default' entry is applied automatically when create_page is called without an explicit template. Conventional names: 'default' (header-only generic wrap), 'lesson' (lesson-plan layout), 'assessment' (assessment-page layout). Schools can add more names.",
+    ),
   academicCalendar: z
     .object({
       weeksPerYear: z.number().int().positive().optional(),
@@ -46,7 +61,79 @@ export const SchoolConfigSchema = z.object({
 
 export type Competency = z.infer<typeof CompetencySchema>;
 export type CompetencyFramework = z.infer<typeof CompetencyFrameworkSchema>;
+export type PageTemplate = z.infer<typeof PageTemplateSchema>;
 export type SchoolConfig = z.infer<typeof SchoolConfigSchema>;
+
+export interface TemplateApplication {
+  /** The resulting body to POST to Canvas. */
+  body: string;
+  /** Which template was applied (e.g., "default", "lesson"), or null if none. */
+  appliedTemplate: string | null;
+  /** Non-fatal warnings (e.g., "{{body}} missing — appended at end"). */
+  warnings: string[];
+}
+
+/**
+ * Apply a named page template to `body`, using `{{title}}` and `{{body}}` as
+ * substitution tokens. Returns the body unchanged when no template is configured
+ * or `templateName` is "none".
+ *
+ * Lookup rules:
+ *   - templateName === "none"         → no wrap (returns body verbatim)
+ *   - templateName === undefined      → uses "default" if configured, else no wrap
+ *   - templateName === "<other>"      → uses that named template, throws if missing
+ */
+export function applyPageTemplate(
+  schoolConfig: SchoolConfig | null,
+  body: string,
+  title: string,
+  templateName?: string,
+): TemplateApplication {
+  if (templateName === "none") {
+    return { body, appliedTemplate: null, warnings: [] };
+  }
+  const templates = schoolConfig?.pageTemplates;
+  if (!templates || Object.keys(templates).length === 0) {
+    return { body, appliedTemplate: null, warnings: [] };
+  }
+  const name = templateName ?? "default";
+  const template = templates[name];
+  if (!template) {
+    if (templateName === undefined) {
+      // Caller didn't ask for one; "default" simply isn't configured.
+      return { body, appliedTemplate: null, warnings: [] };
+    }
+    const available = Object.keys(templates).join(", ");
+    throw new Error(
+      `Unknown page template "${templateName}". Configured templates: ${available || "(none)"}. ` +
+        `Pass template: "none" to bypass wrapping.`,
+    );
+  }
+
+  const warnings: string[] = [];
+  let html = template.html;
+  const hasBodyToken = html.includes("{{body}}");
+  if (hasBodyToken) {
+    html = html.split("{{body}}").join(body);
+  } else {
+    warnings.push(
+      `Template "${name}" has no {{body}} token; body content was appended after the template HTML.`,
+    );
+    html = `${html}\n${body}`;
+  }
+  // Title substitution is optional. Templates without {{title}} just don't get it.
+  html = html.split("{{title}}").join(escapeHtml(title));
+  return { body: html, appliedTemplate: name, warnings };
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 export interface LoadSchoolConfigOptions {
   /** Override path for testing. When omitted, reads SCHOOL_CONFIG env var. */

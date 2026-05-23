@@ -24,5 +24,15 @@
   "academicCalendar": {
     "weeksPerYear": 36,
     "termNames": ["Fall", "Spring"]
+  },
+  "pageTemplates": {
+    "default": {
+      "description": "Wrap applied to every create_page call when no template is specified. Replace this with your school's standard page header/footer HTML. Use {{title}} and {{body}} as injection points; {{title}} is HTML-escaped.",
+      "html": "<div class=\"example-page\">\n  <h1>{{title}}</h1>\n  {{body}}\n</div>"
+    },
+    "lesson": {
+      "description": "Optional lesson-page template. Add additional named templates like this for content-type-specific wrapping.",
+      "html": "<div class=\"example-lesson\">\n  <h1>{{title}}</h1>\n  <section class=\"lesson-body\">{{body}}</section>\n</div>"
+    }
   }
 }

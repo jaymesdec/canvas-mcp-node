@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
 import { registerPageTools } from "../../src/tools/pages.js";
+import type { SchoolConfig } from "../../src/schoolConfig.js";
 
 interface ToolResponse {
   content?: Array<{ type: string; text: string }>;
@@ -9,8 +10,30 @@ interface ToolResponse {
   structuredContent?: Record<string, unknown>;
 }
 
+const templatedConfig: SchoolConfig = {
+  schoolName: "Test School",
+  pageTemplates: {
+    default: {
+      description: "Generic header wrap",
+      html: "<div class=\"wrap\"><h1>{{title}}</h1>{{body}}</div>",
+    },
+    lesson: {
+      description: "Lesson page",
+      html: "<article class=\"lesson\"><h2>{{title}}</h2><section>{{body}}</section></article>",
+    },
+    assessment: {
+      description: "Assessment page",
+      html: "<article class=\"assessment\"><h2>{{title}}</h2>{{body}}</article>",
+    },
+    headerOnly: {
+      description: "Header without a body token — body should append.",
+      html: "<header>{{title}}</header>",
+    },
+  },
+};
+
 describe("registerPageTools", () => {
-  it("registers all four page tools", () => {
+  it("registers all five page tools", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerPageTools(harness.server as never, client);
@@ -18,6 +41,7 @@ describe("registerPageTools", () => {
       "create_page",
       "edit_page_content",
       "get_page_content",
+      "list_page_templates",
       "list_pages",
     ]);
   });
@@ -108,5 +132,174 @@ describe("registerPageTools", () => {
     })) as ToolResponse;
     expect(result.isError).toBe(true);
     expect(result.content?.[0]?.text).toMatch(/at least one of title\/body\/editing_roles/);
+  });
+
+  describe("page templates", () => {
+    it("create_page applies the 'default' template when no template arg is passed", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "lesson-1", title: "Lesson 1", body: "<wrapped/>", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Lesson 1",
+        body: "<p>Hello</p>",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe('<div class="wrap"><h1>Lesson 1</h1><p>Hello</p></div>');
+      expect(result.structuredContent?.template_applied).toBe("default");
+      // Response should NOT echo the wrapped body back (token-saving).
+      expect(result.structuredContent).not.toHaveProperty("body");
+      expect(result.structuredContent?.body_omitted).toBe(true);
+    });
+
+    it("create_page uses the explicit lesson template when template='lesson'", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "x", title: "Lesson X", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Lesson X",
+        body: "<p>Body</p>",
+        template: "lesson",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe('<article class="lesson"><h2>Lesson X</h2><section><p>Body</p></section></article>');
+      expect(result.structuredContent?.template_applied).toBe("lesson");
+    });
+
+    it("create_page uses the assessment template when template='assessment'", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "x", title: "Quiz 1", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Quiz 1",
+        body: "<p>Take the quiz.</p>",
+        template: "assessment",
+      });
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe('<article class="assessment"><h2>Quiz 1</h2><p>Take the quiz.</p></article>');
+    });
+
+    it("create_page with template='none' bypasses wrapping entirely", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "raw", title: "Raw", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Raw",
+        body: "<p>Untouched</p>",
+        template: "none",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe("<p>Untouched</p>");
+      expect(result.structuredContent?.template_applied).toBeNull();
+    });
+
+    it("create_page surfaces a clear error when an unknown template name is passed", async () => {
+      const { client, requests } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "x",
+        body: "<p>x</p>",
+        template: "rubric",
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/Unknown page template "rubric"/);
+      expect(result.content?.[0]?.text).toMatch(/Configured templates: default, lesson, assessment, headerOnly/);
+      // Importantly: no Canvas write happened.
+      expect(requests).toHaveLength(0);
+    });
+
+    it("create_page appends body when a template has no {{body}} token + surfaces a warning", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "x", title: "Hdr", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Hdr",
+        body: "<p>Body</p>",
+        template: "headerOnly",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe("<header>Hdr</header>\n<p>Body</p>");
+      const warnings = result.structuredContent?.warnings as string[];
+      expect(warnings?.[0]).toMatch(/no \{\{body\}\} token/);
+    });
+
+    it("create_page works unchanged when no schoolConfig is loaded (generic deployment)", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, null);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Plain",
+        body: "<p>Plain body</p>",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toBe("<p>Plain body</p>");
+      expect(result.structuredContent?.template_applied).toBeNull();
+    });
+
+    it("create_page HTML-escapes the title when substituting into the template", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      await harness.call("create_page", {
+        course_identifier: 60366,
+        title: 'Bobby <script>alert("xss")</script>',
+        body: "<p>safe</p>",
+      });
+      const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
+      expect(payload.body).toContain("&lt;script&gt;");
+      expect(payload.body).not.toContain("<script>alert");
+    });
+
+    it("list_page_templates returns names + descriptions only (no HTML)", async () => {
+      const { client } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("list_page_templates")) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const templates = result.structuredContent?.templates as Array<Record<string, unknown>>;
+      expect(templates.map((entry) => entry.name).sort()).toEqual(["assessment", "default", "headerOnly", "lesson"]);
+      // No 'html' field on any entry — we don't burn tokens echoing back the template HTML.
+      for (const entry of templates) {
+        expect(entry).not.toHaveProperty("html");
+      }
+      expect(result.structuredContent?.default_applied_automatically).toBe(true);
+    });
+
+    it("list_page_templates returns a 'not configured' response when no templates exist", async () => {
+      const { client } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, null);
+      const result = (await harness.call("list_page_templates")) as ToolResponse;
+      expect(result.structuredContent?.configured).toBe(false);
+      expect(result.structuredContent?.count).toBe(0);
+      expect(result.structuredContent?.message).toMatch(/SCHOOL_CONFIG/i);
+    });
   });
 });
