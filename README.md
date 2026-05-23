@@ -1,573 +1,132 @@
-# canvas-mcp (Node)
+# Canvas for Claude
 
-Node + TypeScript MCP server for Canvas LMS. Designed for the Franklin School teaching ecosystem and ships with a Franklin preset, but **generic by default** — other schools point `SCHOOL_CONFIG` at their own JSON file and the same binary runs unchanged. 30 tools cover course/module/page/quiz/assignment/rubric reads, single-and-bulk grading, account-scoped admin search, FERPA-aware anonymization, and an `execute_typescript` escape hatch for token-efficient bulk operations.
+A drop-in extension that lets Claude actually *do things* in your Canvas LMS — grade submissions, draft lesson pages, build entire modules, find that one rubric you can't remember the name of — instead of just talking about doing them.
 
-**Quick facts:**
+Built by a teacher. Designed for teachers. **No coding required.**
 
-- **FERPA-first.** Every student-data tool returns pseudonyms by default (`Student 1`, `Student 2`, …); teachers/TAs/admins always returned verbatim. De-anonymization requires an explicit operator env opt-in — Claude cannot bypass it from inside a tool call.
-- **Persistent per-course pseudonym map.** Same student → same `Student N` across MCP restarts and weeks of conversations. Stored at `~/.canvas-mcp/anon-maps/{courseId}.json` (configurable).
-- **Anonymization-aware `execute_typescript`.** User code imports `./anonymizer.js` from `code_api/` and gets the same pseudonyms the typed tools produce.
-- **Generic vs. school-specific split.** Anything that varies by school (competency framework, future page templates) lives in `configs/*.json`. The Franklin preset ships at `configs/franklin.json`; other schools copy `configs/example.json`.
+> 📥 **[Download the installer](https://github.com/jaymesdec/canvas-mcp-node/releases/latest)** • [The companion skills](https://github.com/jaymesdec/canvas-mcp-skills) • [Get help](https://github.com/jaymesdec/canvas-mcp-node/issues/new)
 
 ---
 
-## Install — one-click (.mcpb)
+## What you can actually do with this
 
-The fastest path is the bundled `.mcpb` installer. Claude Desktop opens it and walks the user through every required env var.
+Once it's installed, you can ask Claude things like:
 
-### For end-users (you have a .mcpb file)
+> *"Draft a lesson page on the water cycle for DSGN 9. Students will diagram a local watershed and explain evapotranspiration."*
+>
+> *"Grade every submission for the Watershed Quiz. Full credit for naming all three stages, minus 3 for each missing."*
+>
+> *"Plan Module 5 of FSV 117 — AI ethics, 4 weeks, weeks 8–11."*
+>
+> *"Find the student 'Ricci' across all my courses — which classes is she in?"*
+>
+> *"Show me every assignment in DSGN 9 that uses a rubric. Which competencies do the rubrics cover?"*
+>
+> *"Download every PDF submission for the watershed test so I can flip through them locally."*
 
-1. Double-click `canvas-mcp-<version>.mcpb` (or drag it onto Claude Desktop).
-2. In the install dialog, fill in:
-   - **Canvas API URL** — your Canvas base URL, e.g. `https://franklin.instructure.com` (no `/api/v1`).
-   - **Canvas API token** — generated from Canvas → Account → Settings → New Access Token. Stored locally; only ever sent to the Canvas host above.
-   - **Canvas account id** — `self` if you have account-admin (most Franklin teachers do); leave blank if you don't. Lets account-scoped tools work without passing the id on every call.
-   - **School config** — pre-filled with the Franklin preset (`configs/franklin.json` inside the bundle). Franklin teachers leave it as-is. For another school, copy `configs/example.json` out of the unpacked bundle, edit it for your school's framework + templates, and point this at your edited copy. Clear the field to disable the preset entirely.
-   - **Anonymization map directory** — leave blank for the default `~/.canvas-mcp/anon-maps/`, or point at a synced folder (iCloud Drive, Dropbox, NAS) if you want pseudonyms to survive machine loss. **This matters** — losing this directory orphans every `Student N` reference in your past narratives, council reviews, and transition reports.
-   - **Allow de-anonymized output** — leave `false`. Flip to `true` only for explicit real-name workflows; flip back immediately after. Restart Claude Desktop after changing.
-   - **execute_typescript network controls** — leave the defaults. The Canvas host is auto-allowlisted; add others only if a workflow legitimately needs them.
-3. Restart Claude Desktop. The tools appear under the `canvas-mcp` prefix.
-
-### Building your own .mcpb
-
-```bash
-npm install
-npm run build:mcpb
-# → build/mcpb/canvas-mcp-<version>.mcpb
-```
-
-The build:
-
-- Compiles TypeScript to `dist/`.
-- Stages `dist/` as `server/`, copies `configs/`, runs `npm ci --omit=dev` so only production dependencies ship in `node_modules/`.
-- Calls `mcpb pack` to produce a signed-able ZIP at `build/mcpb/canvas-mcp-<version>.mcpb`.
-
-`npm run validate:manifest` validates `manifest.json` against the latest MCPB schema (use this when you edit the manifest).
-
-### Distributing via GitHub Releases
-
-> ⚠️ **The `.mcpb` is gitignored on purpose** — build artifacts don't belong in the repo. Distribute through **GitHub Releases** (attach the file to a tagged release) so the source tree stays clean and the binary is downloadable.
-
-Release workflow for a new version:
-
-1. Bump `version` in `manifest.json` and `package.json` (keep them in sync) and the `SERVER_VERSION` constant in `src/index.ts`.
-2. `npm test && npm run validate:manifest && npm run build:mcpb` — locally verify.
-3. `git tag v<version> && git push --tags`.
-4. On GitHub: Releases → "Draft a new release" → pick the tag → upload `build/mcpb/canvas-mcp-<version>.mcpb` → publish.
-5. Link the release from the README's "Install" section so end-users land on a download URL, not a clone command.
-
-For a fully automated release flow, add a GitHub Actions workflow that runs `npm run build:mcpb` on tag push and uploads the artifact (`softprops/action-gh-release` is the usual choice). Skipped here intentionally — start manual, add CI when it's annoying enough.
-
-## Install — developer (source checkout)
-
-```bash
-npm install
-cp .env.example .env
-# fill in CANVAS_API_URL and CANVAS_API_TOKEN
-npm run build
-npm start
-```
-
-`npm run dev` runs the server under `tsx watch` for iteration.
+Claude does the Canvas API calls. **You review and approve everything before it goes live.**
 
 ---
 
-## Tool reference
+## What stays safe (we mean it)
 
-All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Parameter names are `snake_case` (matching the Python MCP and Canvas API conventions). Full zod schemas live in each `src/tools/<domain>.ts` file.
+This tool talks to Canvas with your full admin credentials. Three things we lock down hard:
 
-### Courses
+### Real student names don't reach Claude
 
-| Tool | Purpose |
-|---|---|
-| `list_courses(enrollment_state?, include?)` | List courses the token-owner is enrolled in. |
-| `get_course_details(course_identifier, include?)` | Fetch a single course by code or numeric id. |
-| `list_account_courses(account_id?, search_term?, enrollment_term_id?, state?, published?, with_enrollments?, include?)` | Search the full account catalog. **Requires account-admin scope.** Defaults `account_id` from `CANVAS_ACCOUNT_ID` env. |
+Every list of students comes back as `Student 1`, `Student 2`, `Student 3` — every time. Teachers, TAs, and admins always come through by name. The pseudonyms are **stable across weeks and across conversations**, so longitudinal artifacts (narratives, council reviews, portfolios) reference the same `Student 7` in March that they did in October.
 
-### Users
+If you genuinely need real names for something (looking up a Canvas user_id by name, for instance), there's a server-side env flag you have to flip yourself. Claude *can't* flip it from a tool call, even if asked.
 
-| Tool | Purpose |
-|---|---|
-| `list_users(course_identifier, enrollment_type?, include_email?, anonymous?, search_term?)` | List users in a course. Anonymized by default. |
-| `list_user_enrollments(user_id, state?)` | Every enrollment for one user, across courses. |
-| `list_account_users(account_id?, search_term?, enrollment_type?, anonymous?)` | Account-wide user search. **Requires account-admin scope.** Anonymized by default. |
+### Nothing publishes itself
 
-### Anonymization (FERPA management)
+- Canvas pages → created as **drafts**, every time
+- Canvas modules → created **unpublished**, every time
+- Grades → written but anchored to your assignment's posting policy. If posting is manual, grades stay hidden until you click Post Grades
 
-| Tool | Purpose |
-|---|---|
-| `create_student_anonymization_map(course_identifier, include_email?)` | Fetch a course roster and persist the pseudonym map. Idempotent — only new students get fresh pseudonyms. Real names appear in the response **only** when `CANVAS_MCP_ALLOW_DEANONYMIZE=true`. |
-| `get_anonymization_status()` | List every per-course map file on disk with entry counts and timestamps. |
+The MCP physically can't bypass these — they're enforced at the server level, not just suggested in skill prompts. **You** publish things. Always.
 
-### Modules
+### Your Canvas token stays on your laptop
 
-| Tool | Purpose |
-|---|---|
-| `list_modules(course_identifier, include_items?)` | List modules; optionally inline items. |
-| `create_module(course_identifier, name, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Create a new Canvas module. Always **unpublished** at creation (Canvas's default). |
-| `add_module_item(course_identifier, module_id, type, title, content_id?, position?)` | Add Page/Assignment/Quiz/Discussion/ExternalUrl/SubHeader to a module. `content_id` routes to `page_url`/`external_url`/`content_id` based on type. |
-
-### Pages
-
-| Tool | Purpose |
-|---|---|
-| `list_pages(course_identifier)` | Slug, title, published flag, updated_at. |
-| `get_page_content(course_identifier, page_url)` | Full HTML body + metadata. |
-| `create_page(course_identifier, title, body, editing_roles?, template?)` | Create a wiki page. **`published: false` forced.** Body is wrapped in the school's `default` page template if configured; pass `template: 'lesson'` / `'assessment'` / `'none'` to override. See "Page templates" below. |
-| `edit_page_content(course_identifier, page_url, title?, body?, slots?, editing_roles?, template?, include_sections?, omit_sections?)` | Update an existing page. Two modes: pass just `title`/`body`/`editing_roles` for a simple field update, OR pass `template`/`slots`/`include_sections`/`omit_sections` to rebuild the body via the template machinery (same as create_page). The right tool for any change to an existing page — using create_page for an existing title creates a duplicate. |
-| `delete_page(course_identifier, page_url)` | Permanently delete a Canvas wiki page. Bypasses the course-code cache to avoid misroutes. |
-| `list_page_templates()` | List the named page templates configured in the school config (names + descriptions only, not full HTML). |
-
-### Quizzes
-
-| Tool | Purpose |
-|---|---|
-| `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Create a quiz. **`published: false` forced.** |
-| `create_quiz_question(course_identifier, quiz_id, question)` | Add a question. `question.question_type` is zod-validated. |
-
-### Assignments
-
-| Tool | Purpose |
-|---|---|
-| `list_assignments(course_identifier, student_id?, include?, anonymous?)` | List assignments. Anonymization-aware when `include[]` contains `submission` or `submission_history`. |
-| `get_assignment_details(course_identifier, assignment_id)` | Full assignment metadata. |
-| `get_assignment_rubric_details(course_identifier, assignment_id)` | Just the rubric, with a structured `{rubric:null,message}` fallback when no rubric is attached. |
-
-### Rubrics
-
-| Tool | Purpose |
-|---|---|
-| `list_all_rubrics(course_identifier, include_criteria?)` | Per-course only (matches the Python MCP signature). |
-| `get_rubric_details(course_identifier, rubric_id)` | Full criterion + rating descriptors. |
-
-### Submissions (read)
-
-| Tool | Purpose |
-|---|---|
-| `list_submissions(course_identifier, assignment_id, include_rubric_assessment?, include_submission_comments?, anonymous?)` | List submissions for an assignment. Anonymized by default. |
-| `get_submission_rubric_assessment(course_identifier, assignment_id, user_id)` | Rubric assessment block with criterion descriptions joined for readability. |
-| `download_submission_attachment(course_identifier, assignment_id, user_id, attachment_id?, target_dir?)` | Stream attachments to disk. Defaults `target_dir` to `./submissions/{courseCode|courseId}/{assignmentId}/`. |
-
-### Grading (write)
-
-All grading tools bypass the course-code cache (re-resolve every call) so a course rename can't misroute a write. Canvas endpoint is the same; the tools differ only in schema shape.
-
-| Tool | Purpose |
-|---|---|
-| `grade_submission(course_identifier, assignment_id, user_id, posted_grade, comment?)` | Just a posted_grade. |
-| `grade_with_rubric(course_identifier, assignment_id, user_id, rubric_assessment, comment?)` | Rubric only (no posted_grade override). |
-| `grade_submission_with_rubric(course_identifier, assignment_id, user_id, posted_grade?, rubric_assessment?, comment?)` | Combined — the kitchen sink. |
-| `bulk_grade_submissions(course_identifier, assignment_id, grades, dry_run?, max_concurrent?, rate_limit_delay?)` | Bulk grade keyed by `user_id`. **Always start with `dry_run: true` on a real course.** Pre-checks the submissions list and lands users without submissions in `skipped_results`. Bounded concurrency, 429-aware (aborts the next batch and reports `unprocessed_user_ids` honestly). |
-
-### Code execution
-
-| Tool | Purpose |
-|---|---|
-| `execute_typescript(code, timeout_seconds?, memory_mb?)` | Run TS in an isolated worker_thread. User code can import from `code_api/` — including `./anonymizer.js` for FERPA-safe transforms. Network blocked by default to non-Canvas hosts. Crashes/loops/OOM stay isolated; the MCP keeps serving. |
-| `list_code_api_modules()` | What's importable from inside `execute_typescript`. |
-
-### School-driven
-
-| Tool | Purpose |
-|---|---|
-| `list_competencies()` | Returns the competency framework from `SCHOOL_CONFIG`. Structured "not configured" response when no preset is loaded — tells the caller what env var to set. |
+It's only ever sent to your school's Canvas host. It's never sent to Anthropic, never sent anywhere except your school's `instructure.com` (or wherever your Canvas lives). Treat it like any other admin password and rotate periodically (Canvas → Account → Settings → expire old token, generate a new one, re-run the install dialog).
 
 ---
 
-## Anonymization (FERPA gate)
+## Install in 3 minutes (no terminal needed)
 
-Every tool that could return real student names defaults to pseudonymized output (`Student 1`, `Student 2`, …). Teachers/TAs/admins are returned verbatim — the gate only fires for students and unknown-role users.
+1. **Download** the latest installer: [canvas-mcp-X.Y.Z.mcpb](https://github.com/jaymesdec/canvas-mcp-node/releases/latest) (the `.mcpb` file in the latest release's assets).
+2. **Double-click** the downloaded file. Claude Desktop opens an install dialog.
+3. **Fill in the prompts:**
+   - **Canvas URL** — your school's Canvas, like `https://franklinjc.instructure.com`.
+   - **Canvas access token** — get one from Canvas → Account → Settings → "+ New Access Token". Copy it, paste it into the dialog. It's stored locally.
+   - **Allow real student names** — leave as `false` unless you need it.
+   - **School config** — Franklin teachers: leave the default. Other schools: see [School Configuration](#for-other-schools) below.
+4. **Restart Claude Desktop.** Done.
 
-**The default is enforced server-side.** If a caller passes `anonymous: false`, the server **ignores it** and returns anonymized output anyway, with a warning string in the response. The only way to actually receive real names is to set the operator-controlled env var `CANVAS_MCP_ALLOW_DEANONYMIZE=true` in your launch config and restart Claude Desktop.
+Need to update? Download the new `.mcpb` from the latest release and double-click. Existing settings carry over.
 
-This applies to:
+---
 
-- `list_users`
-- `list_account_users`
-- `list_assignments` (when `include[]` contains `submission` or `submission_history`)
-- `list_submissions`
-- `create_student_anonymization_map` (suppresses `real_name` / `real_email` in the response; pseudonyms are still allocated and persisted to disk)
+## Your first try
 
-Pseudonyms persist per-course on disk at `~/.canvas-mcp/anon-maps/{courseId}.json` (override the directory via `ANON_MAP_DIR`). The same student receives the same `Student N` across MCP restarts and weeks of conversations, which is what makes longitudinal artifacts (narratives, council reviews, transition reports) coherent.
+Open Claude Desktop and ask:
 
-### Anonymization map durability
+> *"List my Canvas courses."*
 
-The pseudonym map is the only persistent state this MCP holds. Lose it and every `Student N` reference in past artifacts orphans permanently — there's no way to recover the binding from a Canvas user_id back to the assigned pseudonym.
+You should see your courses. That confirms everything's working. Now go bigger:
 
-**Recommendation:** point `ANON_MAP_DIR` at a synced folder (iCloud Drive, Dropbox, OneDrive, a managed Google Drive mount, an internal NAS). For Franklin teachers using the .mcpb installer, set the **Anonymization map directory** prompt at install time to e.g. `~/Library/Mobile Documents/com~apple~CloudDocs/canvas-mcp-anon-maps/`.
+> *"Plan a lesson on the water cycle for DSGN 9 — about watershed geography. Students will diagram a local watershed."*
 
-A teacher who ignores both this guidance and the README will lose pseudonym stability on machine loss. The MCP cannot reconstruct the mapping after the fact.
+Claude (with the `plan-lesson` skill installed — see below) will walk you through it: confirm the course, propose lesson content matching your school's lesson template, surface which competencies it aligns with, and create the draft page in Canvas.
 
-## Account-scoped tools
+---
 
-For admin workflows that need to look beyond the token-owner's own enrollments:
+## The skills (this is where it gets fun)
 
-- `list_account_courses(account_id?, search_term?, state?, ...)` — search the full course catalog
-- `list_account_users(account_id?, search_term?, enrollment_type?, ...)` — search every user in the account
+The MCP gives Claude the *ability* to do things in Canvas. The [**canvas-mcp-skills**](https://github.com/jaymesdec/canvas-mcp-skills) repo gives Claude the *judgment* to do them well, following pedagogical patterns, school conventions, and reasonable defaults.
 
-Both default `account_id` from the `CANVAS_ACCOUNT_ID` env var. Set that to `self` (most common) or a numeric account id in your Claude Desktop config so you don't have to remember it on every call. A clean "requires account-admin scope" error surfaces if the token is missing the permission.
+Skills included so far:
 
-Non-admin teachers can leave `CANVAS_ACCOUNT_ID` unset — Claude will see the structured "account_id is required" error and fall back to course-scoped tools (`list_courses`, `list_users` per course). The 26 course-scoped tools all work normally; the two account-scoped tools are the only ones that need admin.
+- **plan-lesson** — draft a single lesson page following the school's lesson template
+- **plan-assessment** — draft a test / quiz / project / essay / presentation page with grade boundaries and AI-use policy
+- **plan-module** — draft a whole module: outcomes, lessons in sequence, summative assessment
+- **plan-course** — draft a whole course's module sequence + foundational pages
+- **grade-submissions** — grade an entire assignment with teacher review
 
-## School configuration (Franklin and other schools)
+Install instructions are in the [skills repo README](https://github.com/jaymesdec/canvas-mcp-skills#install). It's a `git clone` + `ln -s` or a `cp`; a couple minutes.
 
-The MCP core is **generic** — anything that varies by school lives in a JSON config file that the operator points at via the `SCHOOL_CONFIG` env var. This means the same compiled binary serves Franklin School, another school's deployment, or a no-config "generic" install. There is no Franklin-specific code path; Franklin is just a config preset that happens to ship in-repo.
+---
 
-### What's in the config
+## For other schools
 
-Today, the school config drives one tool (`list_competencies`) and reserves space for future Franklin-style extensions (page templates, academic calendar). The shape is validated with zod at startup; a malformed or missing config logs a warning to stderr and the MCP keeps running with generic defaults (the affected tools return a structured "not configured" response that explains how to fix it).
+Built at Franklin School (Jersey City, NJ), but every school-specific piece — the competency framework, the lesson and assessment page templates, the module naming convention — lives in a single JSON config file. Other schools fork it.
 
-```jsonc
-{
-  "schoolName": "Franklin School (Jersey City, NJ)",
-  "competencyFramework": {
-    "name": "Franklin's 9 Transdisciplinary Competencies",
-    "description": "Used across narratives, council reviews, transition reports.",
-    "competencies": [
-      { "key": "collaboration", "name": "Collaboration", "description": "Works productively..." }
-      // … one entry per competency
-    ]
-  },
-  "academicCalendar": {
-    "weeksPerYear": 35
-  }
-}
-```
+**To use this at your school:**
 
-### Using the Franklin preset (for Franklin teachers)
-
-The repo ships `configs/franklin.json` with the canonical 9 TD Competencies. To enable it:
-
-1. In your `claude_desktop_config.json` under the `canvas-mcp-node-test` (or whatever you named it) entry, add to the `env` block:
-   ```jsonc
-   "SCHOOL_CONFIG": "/Users/jdec/Documents/node-mcp-server/configs/franklin.json"
-   ```
-   Or via the `.mcpb` installer, point the "School config JSON" prompt at `${__dirname}/configs/franklin.json`.
-2. Restart Claude Desktop.
-3. Verify by asking Claude `list_competencies` — the response should include all 9 with descriptions.
-
-The server logs `[canvas-mcp] loaded school config: Franklin School (Jersey City, NJ)` to stderr on startup when the config loads successfully.
-
-### Spinning up a generic / other-school deployment
-
-Two ways:
-
-**Option A — write your own config:**
-1. Copy `configs/example.json` to a path of your choice (e.g., `~/lincoln-high.json`).
-2. Edit the `schoolName`, `competencyFramework.name`, and the `competencies` array. Keep the `key` slugs short and stable (other tools may eventually key off them).
-3. Point `SCHOOL_CONFIG` at the file in your Claude Desktop config.
+1. Copy `configs/example.json` from the unpacked `.mcpb` (or from this repo).
+2. Edit it for your competencies (your school's "21st Century Skills" or "Habits of Mind" or whatever) and your page template HTML.
+3. In the install dialog, point the **School config** field at your edited file.
 4. Restart Claude Desktop.
 
-**Option B — run with no school config at all:**
-Don't set `SCHOOL_CONFIG`. `list_competencies` will return a structured `{ configured: false, message: … }` response telling Claude what env var to set, but every other tool works normally. This is the right setup for schools that aren't using a competency framework.
-
-### Adding a school-specific field later
-
-When a new piece of school-specific data emerges (e.g., a Franklin HTML page template that `create_page` should default to), the workflow is:
-
-1. Extend `SchoolConfigSchema` in `src/schoolConfig.ts` with the new field (optional, zod-validated).
-2. Update `configs/franklin.json` and `configs/example.json` with the new shape (Franklin gets real values, the example gets a documented placeholder).
-3. Read it from `schoolConfig` in the tool that consumes it; fall back to a generic default when the field is absent.
-4. Add tests covering both the configured and unconfigured paths.
-
-This keeps the generic-vs-Franklin split clean as the surface grows. Anything in the config is per-school; anything in `src/` outside of `schoolConfig.ts` consumers is generic and shared.
-
-### Page templates
-
-Schools often have a consistent institutional look for Canvas pages — Franklin wraps content in a school header/footer with a banner, school logo, and per-course nav strip; another school might use a different layout. `create_page` automatically wraps the body in a configured template, so every page Claude creates ships with your school's standard look without the teacher having to remember.
-
-Templates are keyed by name in the school config under `pageTemplates`. Each template has:
-
-- **`html`** — the template HTML with substitution tokens
-- **`slots`** *(optional)* — named content holes used by multi-content templates like `lesson`
-- **`sections`** *(optional)* — optional/conditional accordion sections with default include/omit state
-
-Example: a generic single-content template plus a multi-slot lesson template:
-
-```jsonc
-{
-  "pageTemplates": {
-    "default": {
-      "description": "Header-only generic wrap. Applied when no template is specified.",
-      "html": "<div class=\"school-page\"><h1>{{title}}</h1>{{body}}</div>"
-    },
-    "lesson": {
-      "description": "Lesson page with intro blocks and accordions.",
-      "html": "<header>{{course_name}} — {{title}}</header><section>{{slot:about}}</section>...<!-- SECTION:discussion -->...{{slot:discussion}}...<!-- /SECTION:discussion -->",
-      "slots": {
-        "about":      { "description": "What students will learn about" },
-        "discussion": { "description": "Discussion forum link (only when used)" }
-      },
-      "sections": {
-        "discussion": { "default": "omit", "description": "Discussion accordion. Off by default — pass include_sections to add." }
-      }
-    }
-  }
-}
-```
-
-**Substitution tokens** (the server fills these in before posting to Canvas):
-
-| Token | Filled with |
-|---|---|
-| `{{title}}` | The page's title (HTML-escaped) |
-| `{{body}}` | The `body` arg to `create_page` (legacy single-slot) |
-| `{{slot:NAME}}` | The value at `slots[NAME]` in the call |
-| `{{course_name}}` | Canvas `course.name`. Fetched only when the template references this token. (HTML-escaped.) |
-| `{{course_id}}` | Numeric course id |
-| `{{course_url}}` | `https://<your-canvas-host>/courses/<course_id>` |
-
-**How `create_page` chooses what to wrap:**
-
-```
-create_page(body: "<p>Hello</p>")                           // → "default" template
-create_page(body: "<p>x</p>", template: "lesson")           // → "lesson" template
-create_page(template: "lesson", slots: {about: "...", ...}) // → multi-slot
-create_page(body: "<p>x</p>", template: "none")             // → no wrap
-```
-
-**Optional sections (the `include_sections` / `omit_sections` mechanism):**
-
-Wrap conditional accordion blocks in `<!-- SECTION:name -->...<!-- /SECTION:name -->` markers. The config declares each section's default state:
-
-- `default: "include"` → section is present unless `omit_sections: ["name"]` is passed
-- `default: "omit"` → section is absent unless `include_sections: ["name"]` is passed
-
-Section markers are stripped from the final HTML; their content is either kept (included) or removed (omitted). Section names that appear in `include_sections` / `omit_sections` but aren't declared in the config are silently ignored.
-
-**Where the work happens (token-cost note):** template substitution runs **inside the MCP server**, not in Claude's context. The template HTML never enters the conversation — Claude passes slots + flags, the server wraps everything, posts to Canvas. This keeps token cost flat regardless of how large the template is. Symmetrically, `create_page` strips the body from its response (returning URL, slug, metadata, `template_applied`, `included_sections`, `omitted_sections`) so a freshly-wrapped page doesn't burn tokens on the way back.
-
-**Discovering what's available:** `list_page_templates` returns the configured templates with their slot names + descriptions and section names + defaults + descriptions. (Never the full HTML.) Skills call it to know what slots to fill and which sections might need to be toggled.
-
-**Adding more templates:** any string key works (`"weekly_recap"`, `"unit_overview"`, etc.). The names `"default"`, `"lesson"`, and `"assessment"` are conventions, not requirements.
-
-#### Lesson template (Franklin preset)
-
-The bundled Franklin lesson template (`configs/franklin.json` → `pageTemplates.lesson`) defines:
-
-**Slots** (all populated by the planning skill):
-
-| Slot | Purpose |
-|---|---|
-| `about` | What students will learn about (1–2 sentence topic summary) |
-| `to` | What skills students will gain (typically a bulleted list of can-do statements) |
-| `concepts` | Key concepts and terms with brief definitions |
-| `resources` | Links to readings, videos, websites, other materials |
-| `tasks` | Tasks for students to complete during the lesson |
-| `discussion` | Discussion forum link / prompt (only used when the section is included) |
-| `assessment` | Link to a related assessment task |
-
-**Sections** (override per-call with `include_sections` / `omit_sections`):
-
-| Section | Default | When to toggle |
-|---|---|---|
-| `discussion` | omit | Include when the teacher mentions a discussion, debate, or forum prompt |
-| `assessment` | include | Omit for purely formative lessons with no graded task to link |
-
-**Per-course tokens** the lesson template uses: `{{course_name}}`, `{{course_url}}`, `{{title}}`. The course nav strip (Start Here, Syllabus, Modules, More Resources) is templated via `{{course_url}}` so the same template works across every course without re-uploading.
-
-Example call from a `plan-lesson` skill:
-
-```
-create_page(
-  course_identifier: "DSGN_9_120251",
-  title: "The Water Cycle",
-  template: "lesson",
-  slots: {
-    about: "<p>The water cycle and watershed geography.</p>",
-    to: "<ul><li>Diagram a local watershed</li><li>Explain evapotranspiration</li></ul>",
-    concepts: "<p><strong>Watershed:</strong> ...</p>",
-    resources: "<ul><li>USGS watershed tool</li></ul>",
-    tasks: "<ol><li>Map your home watershed</li></ol>",
-    assessment: "<p>See the watershed quiz, due Friday.</p>"
-  }
-)
-```
-
-To add a discussion accordion to that lesson, pass `include_sections: ["discussion"]` and fill `slots.discussion`. The response includes `included_sections` and `omitted_sections` arrays so Claude can confirm what landed in the page.
-
-**Updating an existing lesson page:** use `edit_page_content` with the same template machinery. For example, to add a discussion accordion to a lesson page that doesn't have one:
-
-```
-edit_page_content(
-  course_identifier: "DSGN_9_120251",
-  page_url: "the-water-cycle",
-  template: "lesson",
-  include_sections: ["discussion"],
-  slots: {
-    about: "...", to: "...", concepts: "...", resources: "...",
-    tasks: "...", discussion: "<p>New discussion prompt</p>", assessment: "..."
-  }
-)
-```
-
-The body is rebuilt from the template in place — no duplicate page is created. Important: you must provide ALL slots you want in the result, not just the ones that changed. The MCP doesn't preserve previous slot content from the on-Canvas HTML (the page was wrapped HTML, and parsing it back is fragile). If your skill keeps track of the slot content it generated, that's the source of truth for the rebuild.
-
-#### Assessment template (Franklin preset)
-
-The bundled Franklin assessment template (`configs/franklin.json` → `pageTemplates.assessment`) defines:
-
-**Slots** (all required, all populated by the planning skill):
-
-| Slot | Purpose |
-|---|---|
-| `description` | Top-level description of what the assessment is — intro paragraph plus a list of what students will do |
-| `pre_work` | What students should have completed BEFORE taking the assessment |
-| `structure_and_grading` | Three things in one slot: structure description (number of questions, points, etc.), grade weighting (what percent of trimester), and a grade boundaries table mapping A+ → F to point ranges |
-| `submission` | How students submit (in-class paper, Canvas upload, etc.) |
-| `time` | Time allotment — standard + extended-time accommodations |
-| `ai_use` | Acceptable and unacceptable uses of AI for this specific assessment |
-
-**Sections:** none — every block is required, no toggling.
-
-**Per-course tokens:** `{{course_name}}`, `{{course_url}}`, `{{title}}` — same as the lesson template.
-
-Note on the grade boundaries table: the table HTML lives inside the `structure_and_grading` slot content, not the template itself. The planning skill generates an 11-row table (A+, A, A-, B+, B, B-, C+, C, C-, D, F) with point ranges based on the assessment's total points. This keeps the template flexible across different point totals; if a school wants enforced consistency, the table structure can be extracted to its own slot later without breaking the template API.
-
-Example call from a `plan-assessment` skill:
-
-```
-create_page(
-  course_identifier: "DSGN_9_120251",
-  title: "Watershed Test",
-  template: "assessment",
-  slots: {
-    description: "<p>20-question multiple-choice test on watershed geography.</p>",
-    pre_work: "<p>Review the unit notes.</p><ol><li>Read Chapter 3</li>...</ol>",
-    structure_and_grading: "<p>20 questions × 1 point each.</p><p>15% of trimester.</p><table>...</table>",
-    submission: "<p>In class, on paper.</p>",
-    time: "<p>45 minutes. Extended time: 60 minutes.</p>",
-    ai_use: "<p>Acceptable:</p><ul>...</ul><p>Unacceptable:</p><ul>...</ul>"
-  }
-)
-```
-
-### What is *not* in the school config (intentionally)
-
-These stay generic — they're either federal law, Canvas-API standard, or sensible defaults for any school:
-
-- FERPA anonymization and the `CANVAS_MCP_ALLOW_DEANONYMIZE` gate
-- Course-code preferred over numeric id in user-facing output
-- `published: false` default on `create_page` / `create_quiz`
-- Course-code → course-id cache and the bypass-on-write rule
-- Anything Canvas-API specific (pagination, retry, error shapes)
-
-If you find yourself tempted to put one of these in `schoolConfig.json`, push back — it's almost certainly a generic concern.
+Full guide: [`docs/SCHOOL_CONFIG.md`](docs/SCHOOL_CONFIG.md).
 
 ---
 
-## execute_typescript
+## Going deeper
 
-For token-efficient bulk operations — grading 90 submissions at once, scanning every rubric across a course, generating per-student narratives — running the loop *inside* the MCP server (rather than streaming all data into Claude's context) saves enormous amounts of token throughput. `execute_typescript` is that escape hatch.
-
-User code runs in a `node:worker_threads` Worker:
-
-- **Terminable timeout.** Default 120s, max 600s. On timeout, `worker.terminate()` reclaims the thread and the MCP keeps serving other tools.
-- **Memory cap.** `resourceLimits.maxOldGenerationSizeMb` (default 512 MB). Worker is OOM-killed by Node; the main thread is unaffected. Caveat: `Buffer`/`ArrayBuffer` use external memory and are NOT bounded by this — only the timeout protects against those.
-- **Crashes stay isolated.** A `process.exit()`, infinite loop, or OOM in user code doesn't restart Claude Desktop. The next tool call works immediately.
-- **Network guard ON by default.** Patches `net.connect`, `tls.connect`, `http.request`/`get`, `https.request`/`get`, and `globalThis.fetch`. Only the Canvas host (parsed from `CANVAS_API_URL`) is allowed by default. `TS_SANDBOX_ALLOWLIST_HOSTS` adds more; `TS_SANDBOX_BLOCK_OUTBOUND=false` disables the guard entirely.
-- **Token scrubbing.** Before posting back, the literal `CANVAS_API_TOKEN` value is substring-replaced with `***REDACTED***` in stdout/stderr/error.message/stack — so a leaking trace can't surface the credential into Claude's tool-result context.
-
-### What user code can import
-
-Discover the catalog with `list_code_api_modules`. Today:
-
-```ts
-// FERPA-safe — same pseudonyms list_users/list_submissions produce
-import { anonymizeUsers, anonymizeSubmissions, classifyRole } from "./anonymizer.js";
-
-// Canvas read/write helpers (form-encoded grading included)
-import { listCourses, getCourseDetails } from "./canvas/courses/index.js";
-import { listSubmissions } from "./canvas/assignments/listSubmissions.js";
-import { gradeWithRubric, bulkGrade } from "./canvas/grading/index.js";
-
-// Lower-level HTTP if you need it
-import { canvasGet, canvasPost, canvasPutForm, fetchAllPaginated } from "./client.js";
-```
-
-### Use ./anonymizer.js for any student-facing transformation
-
-When user code processes student data, route it through `./anonymizer.js`:
-
-```ts
-import { listSubmissions } from "./canvas/assignments/listSubmissions.js";
-import { anonymizeSubmissions } from "./anonymizer.js";
-
-const submissions = await listSubmissions({ courseIdentifier: "60366", assignmentId: "123" });
-const anonymized = await anonymizeSubmissions(60366, submissions);
-// anonymized has the same Student N pseudonyms list_submissions would have returned
-```
-
-This is the difference between honoring the FERPA gate and bypassing it. The on-disk map is shared between the worker and the main thread, so pseudonyms stay consistent across both paths.
+- **[Every tool Claude can call](docs/REFERENCE.md)** — full tool catalog with parameters, behavior notes, security model, troubleshooting, architecture
+- **[School configuration guide](docs/SCHOOL_CONFIG.md)** — how the school JSON works, what fields are available, how to add page templates, how to extend it later
+- **[Migration guide](docs/MIGRATION.md)** — for teachers moving from the Python `canvas-mcp-fork` to this version
+- **[Contributor notes](CLAUDE.md)** — invariants, code structure, the never-publish rule, the FERPA gate, how to add a new tool
 
 ---
 
-## Security
+## Need help?
 
-### Canvas API token
-
-The token is the most sensitive piece of state in the system. It carries full account-admin access (assuming you generated it as an admin); leaking it lets an attacker grade, message, modify courses, and pull every student record.
-
-- **Stored locally only.** `.env` and the .mcpb installer's prompt both keep the token on disk where Claude Desktop is running — it's never sent anywhere except your Canvas host.
-- **Rotate periodically.** Canvas → Account → Settings → expire the old token, generate a new one, update your `.env` or re-run the .mcpb install dialog. Treat it like any other admin password.
-- **Token scrubbing in execute_typescript.** Worker output (stdout/stderr/error/stack) has the literal token value substring-replaced with `***REDACTED***` before being posted back. Defends against prompt-injection-induced credential exfiltration through a deliberately leaking stack trace.
-
-### Network egress (execute_typescript)
-
-`execute_typescript` runs LLM-authored code with an account-admin Canvas token in scope. The default-on network guard means user code can only reach the Canvas host you configured, even if it's instructed otherwise (e.g., by prompt-injected content inside a student submission).
-
-The guard is **best-effort**, not a strong sandbox — a determined attacker controlling the user-code source can find ways around any in-process monkey-patch. It raises the cost of accidental exfiltration; it does not stop a knowledgeable attacker. Documented at the top of `src/workers/network_guard.ts`.
-
-### FERPA / student data
-
-Pseudonymization is the primary defense. Real names never reach Claude's context window unless the operator has explicitly set `CANVAS_MCP_ALLOW_DEANONYMIZE=true` (and restarted). Even when Claude is asked to "show real names," the server returns pseudonyms anyway and surfaces a warning. See "Anonymization (FERPA gate)" above.
+- **Something not working?** Open an issue: [github.com/jaymesdec/canvas-mcp-node/issues](https://github.com/jaymesdec/canvas-mcp-node/issues/new)
+- **Want to know what's possible?** Just ask Claude — *"what can the Canvas MCP do?"* — it'll list the tools and walk through use cases.
+- **Want to contribute or fork?** The whole thing is MIT-licensed. PRs welcome.
 
 ---
 
-## Troubleshooting
-
-### "Missing required environment variable: CANVAS_API_URL"
-
-The MCP exits at startup if `CANVAS_API_URL` or `CANVAS_API_TOKEN` is unset. In Claude Desktop, the entry under `mcpServers` needs an `env` block (or the .mcpb installer prompts you on install).
-
-### "list_account_courses requires account-admin scope"
-
-Your token doesn't have admin permission on the account. Either generate an admin token, or stop using account-scoped tools (everything else works without admin).
-
-### Pseudonyms drift between sessions
-
-You're running `list_users` (or similar) without first calling `create_student_anonymization_map` for that course. The lazy-allocation path assigns pseudonyms in whatever order Canvas returns users — which can shift between calls.
-
-**Fix:** call `create_student_anonymization_map` once per course, before any longitudinal workflow. That seeds the file with stable pseudonyms in roster order, and every subsequent call returns the same `Student N` for the same Canvas user_id.
-
-### "SANDBOX_NETWORK_BLOCKED" in execute_typescript
-
-User code tried to reach a host outside the allowlist. Either:
-- The workflow legitimately needs the host — add it to `TS_SANDBOX_ALLOWLIST_HOSTS` (comma-separated) and restart.
-- The workflow shouldn't be reaching that host — investigate. Common cause: a library tries to phone home on startup.
-
-### Worker spawn fails with "Cannot find module 'tsx/esm'"
-
-You ran a checkout install with `npm install --omit=dev` or similar. Currently `tsx` is a runtime dependency (the worker compiles user TypeScript on the fly). Re-install with `npm install` (no flags) and rebuild.
-
-### "no Canvas course matches ..."
-
-Course-code resolution failed. The MCP's `resolveCourseId` calls `GET /api/v1/courses?search_term=...` to map a course code to a numeric id; if no result matches, you get this error. Most often the cause is a typo in the course code or a course you're not enrolled in (and you don't have account-admin to see it). Try `list_account_courses` (if admin) to find it.
-
----
-
-## Architecture notes
-
-- **Single CanvasClient** (`src/canvasClient.ts`) — axios-backed, handles 429+Retry-After backoff, Canvas Link-header pagination, in-process course-code → id cache (bypassed on writes so renames can't misroute).
-- **Persistent Anonymizer** (`src/anonymizer.ts`) — per-course JSON map at `${ANON_MAP_DIR}/{courseId}.json`. Atomic same-dir tmp+rename writes with `0o600`/`0o700` modes. Per-course async mutex prevents double-allocation under concurrent calls.
-- **Lifted `code_api/`** (`src/code_api/`) — copied verbatim from the Python `canvas-mcp-fork` so `execute_typescript` can import the same modules the upstream MCP supports. **Do not modify locally** — fixes flow upstream first, then re-lift.
-- **School config** (`src/schoolConfig.ts`) — single boundary between generic core and Franklin-specific data. Other schools point `SCHOOL_CONFIG` at their own JSON.
-- **`snake_case` everywhere** — tool names AND zod schema parameter names. Matches the Python MCP signatures exactly so the user's existing `teaching-AIssitant/` skills don't need parameter renames (only the few items in `docs/MIGRATION.md`).
-
----
-
-## Plan
-
-Design document: `docs/plans/2026-05-22-001-feat-canvas-mcp-typescript-port-plan.md`.
-
-Skill-by-skill migration (for teachers moving from the Python `canvas-mcp-fork` to this MCP): `docs/MIGRATION.md`.
+Made by **Jaymes Dec @ Franklin School, Jersey City, NJ.**
