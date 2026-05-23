@@ -20,7 +20,7 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.3.3";
+const SERVER_VERSION = "0.3.4";
 
 function requireEnv(name: string): string {
   const value = process.env[name];

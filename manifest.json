@@ -3,12 +3,12 @@
   "manifest_version": "0.3",
   "name": "canvas-mcp",
   "display_name": "Canvas LMS",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "icon": "icon.png",
-  "description": "Canvas LMS MCP server with FERPA-aware anonymization, account-admin tools, grading suite, and a TypeScript code-execution escape hatch.",
-  "long_description": "Drop-in MCP server for Canvas LMS. Lists/creates Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk with dry-run + bounded concurrency), and exposes execute_typescript for token-efficient bulk operations against a curated code_api/. Every student-data path defaults to pseudonymized output (Student 1, Student 2, …) with a per-course persistent map on disk so longitudinal artifacts stay coherent. De-anonymization is gated by the operator — Claude cannot turn it off without an explicit env opt-in. Ships an optional Franklin School preset (9 TD Competencies) that other schools can swap by pointing SCHOOL_CONFIG at their own JSON file.",
+  "description": "FERPA compliant MCP server for Canvas LMS.",
+  "long_description": "FERPA compliant MCP server for Canvas LMS. Read, update, and write Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk). All from Claude Desktop.",
   "author": {
-    "name": "Franklin School"
+    "name": "Jaymes Dec @ Franklin School, Jersey City, NJ"
   },
   "license": "MIT",
   "keywords": ["canvas", "lms", "education", "ferpa", "grading", "teaching"],
