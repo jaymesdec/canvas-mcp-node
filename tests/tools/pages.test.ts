@@ -450,6 +450,60 @@ describe("registerPageTools", () => {
       expect(payload.body).not.toContain('onerror="alert(1)"');
     });
 
+    it("applies the real Franklin assessment template end-to-end with all 6 slots", async () => {
+      // Load the actual franklin.json so this test catches regressions in the shipped preset
+      const { loadSchoolConfig } = await import("../../src/schoolConfig.js");
+      const path = await import("node:path");
+      const franklinConfig = await loadSchoolConfig({
+        configPath: path.resolve("configs/franklin.json"),
+      });
+      expect(franklinConfig).not.toBeNull();
+
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: "Design 9", course_code: "DSGN_9_120251" } },
+        { status: 200, data: { url: "watershed-test", title: "Watershed Test", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, franklinConfig);
+
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Watershed Test",
+        template: "assessment",
+        slots: {
+          description: "<p>20-question multiple-choice test on watershed geography.</p>",
+          pre_work: "<p>Review the watershed unit notes.</p><ol><li>Read Chapter 3</li><li>Complete the practice quiz</li></ol>",
+          structure_and_grading: "<p>20 multiple-choice questions worth 1 point each.</p><p>This assessment is worth 15% of the trimester grade.</p><p><strong>Grade Boundaries</strong></p><table border=\"1\"><tbody><tr><td>A+</td><td>20</td></tr><tr><td>A</td><td>18-19</td></tr><tr><td>F</td><td>0-10</td></tr></tbody></table>",
+          submission: "<p>Take in class on paper. Hand in to teacher when complete.</p>",
+          time: "<p>45 minutes. Extended time: 60 minutes.</p>",
+          ai_use: "<p>Acceptable:</p><ul><li>None — this is a closed-book individual assessment</li></ul><p>Unacceptable:</p><ul><li>All AI tools</li></ul>",
+        },
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent?.template_applied).toBe("assessment");
+
+      const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
+      // Banner gets course name + title
+      expect(payload.body).toContain('<span id="kl_banner_left">Design 9</span>');
+      expect(payload.body).toContain('<span id="kl_banner_right">Watershed Test</span>');
+      // Nav links resolved to this course's id
+      expect(payload.body).toContain('href="https://canvas.example.com/courses/60366/modules"');
+      // School logo URL kept as-is (course 413 is the stable home)
+      expect(payload.body).toContain("/courses/413/files/20996/download");
+      // All 6 slot contents rendered
+      expect(payload.body).toContain("20-question multiple-choice test on watershed geography");
+      expect(payload.body).toContain("Review the watershed unit notes");
+      expect(payload.body).toContain("15% of the trimester grade");
+      expect(payload.body).toContain("<table"); // grade boundaries table from skill output
+      expect(payload.body).toContain("Take in class on paper");
+      expect(payload.body).toContain("Extended time: 60 minutes");
+      expect(payload.body).toContain("closed-book individual assessment");
+      // No leftover slot tokens
+      expect(payload.body).not.toContain("{{slot:");
+      expect(payload.body).not.toContain("{{course_");
+    });
+
     it("list_page_templates surfaces slot + section metadata (descriptions only, no HTML)", async () => {
       const { client } = buildMockCanvas([]);
       const harness = buildToolHarness();

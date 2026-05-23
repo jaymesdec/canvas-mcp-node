@@ -118,6 +118,40 @@ describe("loadSchoolConfig", () => {
       "Adaptability",
       "Agency",
     ]);
+
+    // Lesson template
+    const lesson = result?.pageTemplates?.lesson;
+    expect(lesson).toBeDefined();
+    expect(Object.keys(lesson?.slots ?? {}).sort()).toEqual([
+      "about",
+      "assessment",
+      "concepts",
+      "discussion",
+      "resources",
+      "tasks",
+      "to",
+    ]);
+    expect(lesson?.sections?.discussion?.default).toBe("omit");
+    expect(lesson?.sections?.assessment?.default).toBe("include");
+
+    // Assessment template
+    const assessment = result?.pageTemplates?.assessment;
+    expect(assessment).toBeDefined();
+    expect(Object.keys(assessment?.slots ?? {}).sort()).toEqual([
+      "ai_use",
+      "description",
+      "pre_work",
+      "structure_and_grading",
+      "submission",
+      "time",
+    ]);
+    // No optional sections on assessment — every block is required
+    expect(assessment?.sections).toBeUndefined();
+    // The grade boundaries table is part of the structure_and_grading slot content (skill-generated)
+    // — the template itself doesn't bake the table HTML in, so the structure_and_grading <h3> heading
+    // is what should appear in the HTML, with the slot token directly under it.
+    expect(assessment?.html).toContain('<h3>Structure and Grading</h3>');
+    expect(assessment?.html).toContain('{{slot:structure_and_grading}}');
   });
 
   it("validates the shipped configs/example.json", async () => {

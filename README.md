@@ -384,6 +384,45 @@ create_page(
 
 To add a discussion accordion to that lesson, pass `include_sections: ["discussion"]` and fill `slots.discussion`. The response includes `included_sections` and `omitted_sections` arrays so Claude can confirm what landed in the page.
 
+#### Assessment template (Franklin preset)
+
+The bundled Franklin assessment template (`configs/franklin.json` → `pageTemplates.assessment`) defines:
+
+**Slots** (all required, all populated by the planning skill):
+
+| Slot | Purpose |
+|---|---|
+| `description` | Top-level description of what the assessment is — intro paragraph plus a list of what students will do |
+| `pre_work` | What students should have completed BEFORE taking the assessment |
+| `structure_and_grading` | Three things in one slot: structure description (number of questions, points, etc.), grade weighting (what percent of trimester), and a grade boundaries table mapping A+ → F to point ranges |
+| `submission` | How students submit (in-class paper, Canvas upload, etc.) |
+| `time` | Time allotment — standard + extended-time accommodations |
+| `ai_use` | Acceptable and unacceptable uses of AI for this specific assessment |
+
+**Sections:** none — every block is required, no toggling.
+
+**Per-course tokens:** `{{course_name}}`, `{{course_url}}`, `{{title}}` — same as the lesson template.
+
+Note on the grade boundaries table: the table HTML lives inside the `structure_and_grading` slot content, not the template itself. The planning skill generates an 11-row table (A+, A, A-, B+, B, B-, C+, C, C-, D, F) with point ranges based on the assessment's total points. This keeps the template flexible across different point totals; if a school wants enforced consistency, the table structure can be extracted to its own slot later without breaking the template API.
+
+Example call from a `plan-assessment` skill:
+
+```
+create_page(
+  course_identifier: "DSGN_9_120251",
+  title: "Watershed Test",
+  template: "assessment",
+  slots: {
+    description: "<p>20-question multiple-choice test on watershed geography.</p>",
+    pre_work: "<p>Review the unit notes.</p><ol><li>Read Chapter 3</li>...</ol>",
+    structure_and_grading: "<p>20 questions × 1 point each.</p><p>15% of trimester.</p><table>...</table>",
+    submission: "<p>In class, on paper.</p>",
+    time: "<p>45 minutes. Extended time: 60 minutes.</p>",
+    ai_use: "<p>Acceptable:</p><ul>...</ul><p>Unacceptable:</p><ul>...</ul>"
+  }
+)
+```
+
 ### What is *not* in the school config (intentionally)
 
 These stay generic — they're either federal law, Canvas-API standard, or sensible defaults for any school:
