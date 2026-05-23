@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "canvas-mcp",
   "display_name": "Canvas LMS",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "icon": "icon.png",
   "description": "FERPA compliant MCP server for Canvas LMS.",
   "long_description": "FERPA compliant MCP server for Canvas LMS. Read, update, and write Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk). All from Claude Desktop.",
@@ -51,10 +51,9 @@
     },
     "school_config": {
       "type": "file",
-      "title": "School config",
-      "description": "JSON file describing your school's competency framework AND institutional page templates (lesson layout, assessment layout, etc. — every page Claude creates wraps in these by default). Defaults to the bundled Franklin preset. Other schools: copy ${__dirname}/configs/example.json out of the bundle, edit it for your school, and point this at your edited copy. Clear the field to disable the preset entirely (every other tool still works).",
-      "required": false,
-      "default": "${__dirname}/configs/franklin.json"
+      "title": "School config (other schools only — leave blank for Franklin defaults)",
+      "description": "Leave BLANK to use the bundled Franklin preset (competency framework + institutional page templates load automatically). Other schools: copy configs/example.json out of the unpacked bundle, edit it for your competencies + templates, and pick your edited file here. The server falls back to the bundled Franklin preset if this file isn't readable.",
+      "required": false
     }
   },
   "compatibility": {

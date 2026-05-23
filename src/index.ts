@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { CanvasClient } from "./canvasClient.js";
 import { Anonymizer } from "./anonymizer.js";
-import { loadSchoolConfig } from "./schoolConfig.js";
+import { loadSchoolConfig, type SchoolConfig } from "./schoolConfig.js";
 import { registerCompetencyTools } from "./tools/competencies.js";
 import { registerCourseTools } from "./tools/courses.js";
 import { registerModuleTools } from "./tools/modules.js";
@@ -20,7 +23,56 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.3.7";
+const SERVER_VERSION = "0.3.8";
+
+/**
+ * Where the .mcpb-bundled franklin.json lives relative to the compiled
+ * server entry point. Layout inside an installed .mcpb is:
+ *   <install>/server/index.js   ← __filename
+ *   <install>/configs/franklin.json
+ * So we walk one level up from server/ to reach configs/.
+ */
+function bundledSchoolConfigPath(): string {
+  const here = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(here), "..", "configs", "franklin.json");
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve which school config to load. Tries, in order:
+ *   1. SCHOOL_CONFIG env var (when set, non-empty, and points at a readable file)
+ *   2. The bundled configs/franklin.json shipped inside the .mcpb
+ *   3. null — no school config, MCP runs in generic mode
+ *
+ * If the env var is set to a path that doesn't resolve (e.g., literal
+ * "${__dirname}/configs/franklin.json" when Claude Desktop's substitution
+ * doesn't reach inside a user_config default), we log a warning and fall
+ * back to the bundled config so Franklin teachers still get their preset.
+ */
+async function resolveSchoolConfig(): Promise<SchoolConfig | null> {
+  const explicit = process.env.SCHOOL_CONFIG?.trim();
+  if (explicit && explicit.length > 0) {
+    if (await pathExists(explicit)) {
+      return loadSchoolConfig({ configPath: explicit });
+    }
+    process.stderr.write(
+      `[${SERVER_NAME}] SCHOOL_CONFIG="${explicit}" did not resolve to a readable file; falling back to the bundled Franklin preset.\n`,
+    );
+  }
+  const bundled = bundledSchoolConfigPath();
+  if (await pathExists(bundled)) {
+    return loadSchoolConfig({ configPath: bundled });
+  }
+  return null;
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -45,10 +97,14 @@ async function main(): Promise<void> {
   const anonymizer = new Anonymizer();
   await anonymizer.init();
 
-  const schoolConfig = await loadSchoolConfig();
+  const schoolConfig = await resolveSchoolConfig();
   if (schoolConfig) {
     process.stderr.write(
       `[${SERVER_NAME}] loaded school config${schoolConfig.schoolName ? `: ${schoolConfig.schoolName}` : ""}\n`,
+    );
+  } else {
+    process.stderr.write(
+      `[${SERVER_NAME}] no school config loaded — running in generic mode (list_competencies, page templates will report 'not configured').\n`,
     );
   }
 
