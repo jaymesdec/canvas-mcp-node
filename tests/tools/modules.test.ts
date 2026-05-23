@@ -10,11 +10,67 @@ interface ToolResponse {
 }
 
 describe("registerModuleTools", () => {
-  it("registers list_modules and add_module_item", () => {
+  it("registers create_module, list_modules, and add_module_item", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerModuleTools(harness.server as never, client);
-    expect([...harness.tools.keys()].sort()).toEqual(["add_module_item", "list_modules"]);
+    expect([...harness.tools.keys()].sort()).toEqual(["add_module_item", "create_module", "list_modules"]);
+  });
+
+  describe("create_module", () => {
+    it("POSTs the module name and returns the created module", async () => {
+      const { client, requests } = buildMockCanvas([
+        {
+          status: 200,
+          data: {
+            id: 999,
+            name: "Module 4: Vibe Coding: Transforming Text into Functional Software with AI (Weeks 24-36)",
+            position: 4,
+            workflow_state: "unpublished",
+          },
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+      const result = (await harness.call("create_module", {
+        course_identifier: 60366,
+        name: "Module 4: Vibe Coding: Transforming Text into Functional Software with AI (Weeks 24-36)",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("POST");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules");
+      const payload = (requests[0]?.data as { module: Record<string, unknown> }).module;
+      // Does NOT include any publish-related fields — relies on Canvas's unpublished default
+      expect(payload).not.toHaveProperty("published");
+      expect(payload).not.toHaveProperty("workflow_state");
+      expect(payload.name).toContain("Module 4");
+      const created = (result.structuredContent?.module as { workflow_state?: string });
+      expect(created.workflow_state).toBe("unpublished");
+    });
+
+    it("threads optional prerequisite_module_ids, position, and unlock_at", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 1000, name: "Module 5", workflow_state: "unpublished" } },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+      await harness.call("create_module", {
+        course_identifier: 60366,
+        name: "Module 5",
+        position: 5,
+        prerequisite_module_ids: [999],
+        require_sequential_progress: true,
+        unlock_at: "2026-09-01T08:00:00Z",
+      });
+      const payload = (requests[0]?.data as { module: Record<string, unknown> }).module;
+      expect(payload).toEqual({
+        name: "Module 5",
+        position: 5,
+        prerequisite_module_ids: [999],
+        require_sequential_progress: true,
+        unlock_at: "2026-09-01T08:00:00Z",
+      });
+    });
   });
 
   it("list_modules with include_items=true threads include[]=items", async () => {

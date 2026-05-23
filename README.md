@@ -104,7 +104,8 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 | Tool | Purpose |
 |---|---|
 | `list_modules(course_identifier, include_items?)` | List modules; optionally inline items. |
-| `add_module_item(course_identifier, module_id, type, title, content_id?, position?)` | Add Page/Assignment/Quiz/SubHeader to a module. |
+| `create_module(course_identifier, name, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Create a new Canvas module. Always **unpublished** at creation (Canvas's default). |
+| `add_module_item(course_identifier, module_id, type, title, content_id?, position?)` | Add Page/Assignment/Quiz/Discussion/ExternalUrl/SubHeader to a module. `content_id` routes to `page_url`/`external_url`/`content_id` based on type. |
 
 ### Pages
 

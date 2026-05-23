@@ -19,6 +19,28 @@ const LIST_MODULES_INPUT = {
     .describe("If true, includes each module's items inline (Canvas include[]=items)."),
 };
 
+const CREATE_MODULE_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  name: z
+    .string()
+    .describe(
+      "Module name. Follow your school's naming convention if one exists. Franklin teachers: 'Module N: Short Title: Subtitle (Weeks X-Y)'.",
+    ),
+  position: z.number().int().positive().optional().describe("1-based position in the course's module list. Omit to append at the end."),
+  prerequisite_module_ids: z
+    .array(z.union([z.string(), z.number()]))
+    .optional()
+    .describe("Numeric ids of modules that must be completed before this one unlocks."),
+  require_sequential_progress: z
+    .boolean()
+    .optional()
+    .describe("If true, students must complete each module item in order before the next unlocks."),
+  unlock_at: z
+    .string()
+    .optional()
+    .describe("ISO-8601 timestamp; module stays locked for students until this date."),
+};
+
 const ADD_MODULE_ITEM_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   module_id: z.union([z.string(), z.number()]),
@@ -60,6 +82,52 @@ interface CanvasModuleItem {
 }
 
 export function registerModuleTools(server: McpServer, canvas: CanvasClient): void {
+  server.registerTool(
+    "create_module",
+    {
+      description:
+        "Create a new Canvas module in a course. Created as **unpublished** (Canvas's default workflow_state) per the cross-project never-auto-publish rule — teacher publishes manually after reviewing the module and its items. Bypasses the course-code cache so a rename mid-session can't misroute the write.",
+      inputSchema: CREATE_MODULE_INPUT,
+    },
+    async (input) => {
+      const args = input as {
+        course_identifier: string | number;
+        name: string;
+        position?: number;
+        prerequisite_module_ids?: Array<string | number>;
+        require_sequential_progress?: boolean;
+        unlock_at?: string;
+      };
+      return safeHandler("create_module", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+
+        // Build the Canvas-shaped module payload. Notably no 'published' field —
+        // Canvas's default is unpublished, which matches our policy.
+        const modulePayload: Record<string, unknown> = { name: args.name };
+        if (args.position !== undefined) modulePayload.position = args.position;
+        if (args.prerequisite_module_ids && args.prerequisite_module_ids.length > 0) {
+          modulePayload.prerequisite_module_ids = args.prerequisite_module_ids;
+        }
+        if (args.require_sequential_progress !== undefined) {
+          modulePayload.require_sequential_progress = args.require_sequential_progress;
+        }
+        if (args.unlock_at !== undefined) modulePayload.unlock_at = args.unlock_at;
+
+        const created = await canvas.post<CanvasModule>(
+          `/api/v1/courses/${courseId}/modules`,
+          { module: modulePayload },
+        );
+
+        return jsonResult(
+          { course_id: courseId, module: created },
+          {
+            summary: `Created module "${created.name}" (id ${created.id}, workflow_state: ${created.workflow_state ?? "unpublished"}) in course ${courseId}. Module is unpublished — teacher publishes manually.`,
+          },
+        );
+      });
+    },
+  );
+
   server.registerTool(
     "list_modules",
     {

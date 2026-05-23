@@ -119,6 +119,15 @@ describe("loadSchoolConfig", () => {
       "Agency",
     ]);
 
+    // Module outcomes template
+    const moduleOutcomes = result?.pageTemplates?.module_outcomes;
+    expect(moduleOutcomes).toBeDefined();
+    expect(Object.keys(moduleOutcomes?.slots ?? {})).toEqual(["outcomes"]);
+    expect(moduleOutcomes?.html).toContain('<h3><i class="fa fa-check"');
+    expect(moduleOutcomes?.html).toContain("By the end of the MODULE");
+    expect(moduleOutcomes?.html).toContain('<ol id="kl_objective_list">');
+    expect(moduleOutcomes?.html).toContain("{{slot:outcomes}}");
+
     // Lesson template
     const lesson = result?.pageTemplates?.lesson;
     expect(lesson).toBeDefined();
