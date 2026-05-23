@@ -71,6 +71,8 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 |---|---|
 | `list_all_rubrics(course_identifier, include_criteria?)` | Per-course only (matches the Python MCP signature). |
 | `get_rubric_details(course_identifier, rubric_id)` | Full criterion + rating descriptors. |
+| `create_rubric(course_identifier, title, criteria, free_form_criterion_comments?, associate_with?)` | Create a new rubric with criteria + ratings. Optionally attach it to an Assignment/Quiz/Discussion in the same API call via `associate_with`. Bypasses the course-code cache. |
+| `create_rubric_association(course_identifier, rubric_id, association_type, association_id, use_for_grading?, hide_score_total?)` | Attach an existing rubric to a different Assignment/Quiz/Discussion. Use for reusing a rubric across multiple assessments. Bypasses the course-code cache. |
 
 ### Submissions (read)
 
