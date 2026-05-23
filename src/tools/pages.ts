@@ -58,6 +58,11 @@ const EDIT_PAGE_CONTENT_INPUT = {
   editing_roles: z.string().optional(),
 };
 
+const DELETE_PAGE_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  page_url: z.string().describe("Page URL slug (the part after /pages/ in the Canvas URL)."),
+};
+
 interface CanvasPageLite {
   url: string;
   title: string;
@@ -253,6 +258,28 @@ export function registerPageTools(
           { wiki_page: wikiPagePayload },
         );
         return jsonResult(trimResponseBody(updated), { summary: `Updated page "${updated.title}".` });
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_page",
+    {
+      description:
+        "Permanently delete a Canvas wiki page. Bypasses the course-code cache (re-resolves every call) so a rename can't misroute the delete. Use for cleaning up orphan/test/duplicate pages.",
+      inputSchema: DELETE_PAGE_INPUT,
+    },
+    async (input) => {
+      const args = input as { course_identifier: string | number; page_url: string };
+      return safeHandler("delete_page", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const deleted = await canvas.del<CanvasPageLite>(
+          `/api/v1/courses/${courseId}/pages/${encodeURIComponent(args.page_url)}`,
+        );
+        return jsonResult(
+          { course_id: courseId, page_url: args.page_url, deleted: trimResponseBody(deleted) },
+          { summary: `Deleted page "${deleted.title}" (slug: ${args.page_url}) from course ${courseId}.` },
+        );
       });
     },
   );

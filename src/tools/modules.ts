@@ -5,8 +5,8 @@ import type { CanvasClient } from "../canvasClient.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
 
 /** Module item types supported in this first cut. The full Canvas enum is larger;
- *  we ship what the plan-lesson / create-quiz skills need today and extend on demand. */
-const SUPPORTED_MODULE_ITEM_TYPES = ["Page", "Assignment", "Quiz", "SubHeader"] as const;
+ *  we ship what the planning skills need today and extend on demand. */
+const SUPPORTED_MODULE_ITEM_TYPES = ["Page", "Assignment", "Quiz", "Discussion", "ExternalUrl", "SubHeader"] as const;
 type SupportedModuleItemType = (typeof SUPPORTED_MODULE_ITEM_TYPES)[number];
 
 const LIST_MODULES_INPUT = {
@@ -23,17 +23,21 @@ const ADD_MODULE_ITEM_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   module_id: z.union([z.string(), z.number()]),
   type: z.enum(SUPPORTED_MODULE_ITEM_TYPES).describe(
-    "Module item type. Supported: Page, Assignment, Quiz, SubHeader. Extend on demand.",
+    "Module item type. Supported: Page, Assignment, Quiz, Discussion, ExternalUrl, SubHeader.",
   ),
   title: z.string(),
   content_id: z
     .union([z.string(), z.number()])
     .optional()
     .describe(
-      "Canvas resource id (page url, assignment id, quiz id). Required for non-SubHeader types.",
+      "Reference to the content this module item points at. The shape depends on `type`:\n" +
+        "  - Page:        the page URL slug (e.g., 'the-water-cycle-2') — Canvas calls this page_url internally.\n" +
+        "  - Assignment / Quiz / Discussion: the numeric Canvas id.\n" +
+        "  - ExternalUrl: the full URL to link to (e.g., 'https://example.com').\n" +
+        "  - SubHeader:   omit. SubHeaders have no content.\n" +
+        "The MCP routes the value to the right Canvas field automatically based on `type`.",
     ),
   position: z.number().int().positive().optional(),
-  /** SubHeader-specific (Canvas uses 'page_url' for pages, but for SubHeader nothing extra is required). */
 };
 
 interface CanvasModule {
@@ -97,16 +101,45 @@ export function registerModuleTools(server: McpServer, canvas: CanvasClient): vo
         position?: number;
       };
       return safeHandler("add_module_item", async () => {
-        if (args.type !== "SubHeader" && args.content_id === undefined) {
-          throw new Error(`add_module_item: content_id is required for type "${args.type}".`);
-        }
         const courseId = await canvas.resolveCourseId(args.course_identifier);
         const moduleItemPayload: Record<string, unknown> = {
           type: args.type,
           title: args.title,
         };
-        if (args.content_id !== undefined) moduleItemPayload.content_id = args.content_id;
         if (args.position !== undefined) moduleItemPayload.position = args.position;
+
+        // Canvas takes a different body field per type. Route content_id to the right slot.
+        switch (args.type) {
+          case "SubHeader":
+            // No content reference; ignore content_id even if passed.
+            break;
+          case "Page":
+            if (args.content_id === undefined) {
+              throw new Error(
+                'add_module_item: content_id is required for Page items. Pass the page URL slug (e.g., "the-water-cycle-2"), NOT the numeric page id.',
+              );
+            }
+            moduleItemPayload.page_url = String(args.content_id);
+            break;
+          case "ExternalUrl":
+            if (args.content_id === undefined) {
+              throw new Error(
+                'add_module_item: content_id is required for ExternalUrl items. Pass the full URL (e.g., "https://example.com").',
+              );
+            }
+            moduleItemPayload.external_url = String(args.content_id);
+            break;
+          case "Assignment":
+          case "Quiz":
+          case "Discussion":
+            if (args.content_id === undefined) {
+              throw new Error(
+                `add_module_item: content_id is required for ${args.type} items. Pass the numeric Canvas resource id.`,
+              );
+            }
+            moduleItemPayload.content_id = args.content_id;
+            break;
+        }
 
         const created = await canvas.post<CanvasModuleItem>(
           `/api/v1/courses/${courseId}/modules/${args.module_id}/items`,

@@ -44,19 +44,9 @@ describe("registerModuleTools", () => {
     expect(modules[0]?.items).toHaveLength(1);
   });
 
-  it("add_module_item posts the wrapped module_item payload for a Page", async () => {
+  it("add_module_item for a Page routes content_id to module_item.page_url (Canvas API requirement)", async () => {
     const { client, requests } = buildMockCanvas([
-      {
-        status: 200,
-        data: {
-          id: 555,
-          module_id: 11,
-          position: 1,
-          title: "Lesson Notes",
-          type: "Page",
-          page_url: "lesson-notes",
-        },
-      },
+      { status: 200, data: { id: 555, module_id: 11, position: 1, title: "Lesson Notes", type: "Page", page_url: "lesson-notes" } },
     ]);
     const harness = buildToolHarness();
     registerModuleTools(harness.server as never, client);
@@ -66,15 +56,55 @@ describe("registerModuleTools", () => {
       module_id: 11,
       type: "Page",
       title: "Lesson Notes",
-      content_id: 12345,
+      content_id: "lesson-notes",
       position: 1,
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.method).toBe("POST");
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules/11/items");
-    expect(requests[0]?.data).toEqual({
-      module_item: { type: "Page", title: "Lesson Notes", content_id: 12345, position: 1 },
+    const payload = (requests[0]?.data as { module_item: Record<string, unknown> }).module_item;
+    // Canvas needs page_url for Page items, NOT content_id
+    expect(payload).toEqual({ type: "Page", title: "Lesson Notes", page_url: "lesson-notes", position: 1 });
+    expect(payload).not.toHaveProperty("content_id");
+  });
+
+  it("add_module_item for an Assignment routes content_id to module_item.content_id", async () => {
+    const { client, requests } = buildMockCanvas([
+      { status: 200, data: { id: 556, module_id: 11, position: 2, title: "HW1", type: "Assignment", content_id: 9999 } },
+    ]);
+    const harness = buildToolHarness();
+    registerModuleTools(harness.server as never, client);
+    await harness.call("add_module_item", {
+      course_identifier: 60366,
+      module_id: 11,
+      type: "Assignment",
+      title: "HW1",
+      content_id: 9999,
     });
+    const payload = (requests[0]?.data as { module_item: Record<string, unknown> }).module_item;
+    expect(payload).toEqual({ type: "Assignment", title: "HW1", content_id: 9999 });
+  });
+
+  it("add_module_item for an ExternalUrl routes content_id to module_item.external_url", async () => {
+    const { client, requests } = buildMockCanvas([
+      { status: 200, data: { id: 557, module_id: 11, position: 3, title: "Reading", type: "ExternalUrl" } },
+    ]);
+    const harness = buildToolHarness();
+    registerModuleTools(harness.server as never, client);
+    await harness.call("add_module_item", {
+      course_identifier: 60366,
+      module_id: 11,
+      type: "ExternalUrl",
+      title: "Reading",
+      content_id: "https://example.com/reading",
+    });
+    const payload = (requests[0]?.data as { module_item: Record<string, unknown> }).module_item;
+    expect(payload).toEqual({
+      type: "ExternalUrl",
+      title: "Reading",
+      external_url: "https://example.com/reading",
+    });
+    expect(payload).not.toHaveProperty("content_id");
   });
 
   it("add_module_item for a SubHeader omits content_id without erroring", async () => {

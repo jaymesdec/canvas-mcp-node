@@ -59,17 +59,53 @@ const templatedConfig: SchoolConfig = {
 };
 
 describe("registerPageTools", () => {
-  it("registers all five page tools", () => {
+  it("registers all six page tools", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerPageTools(harness.server as never, client);
     expect([...harness.tools.keys()].sort()).toEqual([
       "create_page",
+      "delete_page",
       "edit_page_content",
       "get_page_content",
       "list_page_templates",
       "list_pages",
     ]);
+  });
+
+  describe("delete_page", () => {
+    it("issues DELETE against the encoded slug path and returns the trimmed page metadata", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "the-water-cycle-3", title: "The Water Cycle", body: "<full html>", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client);
+      const result = (await harness.call("delete_page", {
+        course_identifier: 60366,
+        page_url: "the-water-cycle-3",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("DELETE");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages/the-water-cycle-3");
+      const deleted = result.structuredContent?.deleted as Record<string, unknown>;
+      // Body stripped to save tokens echoing back wrapped HTML.
+      expect(deleted).not.toHaveProperty("body");
+      expect(deleted.body_omitted).toBe(true);
+      expect(deleted.title).toBe("The Water Cycle");
+    });
+
+    it("URL-encodes weird page slugs before DELETEing", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "weird slug", title: "Weird", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client);
+      await harness.call("delete_page", {
+        course_identifier: 60366,
+        page_url: "weird slug",
+      });
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages/weird%20slug");
+    });
   });
 
   it("list_pages returns slug+title+published+updated_at per item", async () => {

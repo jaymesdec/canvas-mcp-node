@@ -1,11 +1,31 @@
 import { Worker } from "node:worker_threads";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Anonymizer } from "../anonymizer.js";
 import { jsonResult, safeHandler, textResult } from "./toolHelpers.js";
+
+/**
+ * Resolve tsx/esm to an absolute file URL once at module load.
+ * The MCP server is launched by Claude Desktop with CWD=/ (filesystem root),
+ * so the worker's "--import tsx/esm" can't find tsx via package resolution.
+ * Resolving from import.meta.url instead walks up from <bundle>/server/tools/
+ * and finds <bundle>/node_modules/tsx reliably regardless of CWD.
+ */
+function resolveTsxImportUrl(): string | undefined {
+  try {
+    const localRequire = createRequire(import.meta.url);
+    const tsxEsm = localRequire.resolve("tsx/esm");
+    return pathToFileURL(tsxEsm).href;
+  } catch {
+    return undefined;
+  }
+}
+
+const TSX_IMPORT_URL = resolveTsxImportUrl();
 
 interface WorkerResult {
   ok: boolean;
@@ -123,15 +143,22 @@ export function registerCodeExecutionTools(server: McpServer, anonymizer: Anonym
         const env = pickEnvForWorker();
 
         const workerFile = await resolveWorkerFile();
+        if (!TSX_IMPORT_URL) {
+          throw new Error(
+            "execute_typescript: could not resolve tsx/esm from the MCP install. Reinstall the .mcpb (the tsx runtime dependency must ship in node_modules).",
+          );
+        }
         const worker = new Worker(workerFile, {
           workerData: {
             code: args.code,
             env,
             anonRootDir: anonymizer.rootDir,
           },
-          // Register tsx in the worker so it can import .ts files (the lifted
-          // code_api/, the user temp file, and the network guard).
-          execArgv: ["--import", "tsx/esm"],
+          // Register tsx in the worker so it can import .ts files. We pass the
+          // RESOLVED absolute file URL because Claude Desktop launches the MCP
+          // with CWD=/ — the worker can't resolve "tsx/esm" via package lookup
+          // from there. Resolving once from the MCP's own location works.
+          execArgv: ["--import", TSX_IMPORT_URL],
           resourceLimits: {
             maxOldGenerationSizeMb: memoryMb,
           },

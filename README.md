@@ -114,6 +114,7 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 | `get_page_content(course_identifier, page_url)` | Full HTML body + metadata. |
 | `create_page(course_identifier, title, body, editing_roles?, template?)` | Create a wiki page. **`published: false` forced.** Body is wrapped in the school's `default` page template if configured; pass `template: 'lesson'` / `'assessment'` / `'none'` to override. See "Page templates" below. |
 | `edit_page_content(course_identifier, page_url, title?, body?, editing_roles?)` | Update an existing page. Only sends fields you pass. Does NOT re-apply the template. |
+| `delete_page(course_identifier, page_url)` | Permanently delete a Canvas wiki page. Bypasses the course-code cache to avoid misroutes. |
 | `list_page_templates()` | List the named page templates configured in the school config (names + descriptions only, not full HTML). |
 
 ### Quizzes
