@@ -113,7 +113,7 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 | `list_pages(course_identifier)` | Slug, title, published flag, updated_at. |
 | `get_page_content(course_identifier, page_url)` | Full HTML body + metadata. |
 | `create_page(course_identifier, title, body, editing_roles?, template?)` | Create a wiki page. **`published: false` forced.** Body is wrapped in the school's `default` page template if configured; pass `template: 'lesson'` / `'assessment'` / `'none'` to override. See "Page templates" below. |
-| `edit_page_content(course_identifier, page_url, title?, body?, editing_roles?)` | Update an existing page. Only sends fields you pass. Does NOT re-apply the template. |
+| `edit_page_content(course_identifier, page_url, title?, body?, slots?, editing_roles?, template?, include_sections?, omit_sections?)` | Update an existing page. Two modes: pass just `title`/`body`/`editing_roles` for a simple field update, OR pass `template`/`slots`/`include_sections`/`omit_sections` to rebuild the body via the template machinery (same as create_page). The right tool for any change to an existing page — using create_page for an existing title creates a duplicate. |
 | `delete_page(course_identifier, page_url)` | Permanently delete a Canvas wiki page. Bypasses the course-code cache to avoid misroutes. |
 | `list_page_templates()` | List the named page templates configured in the school config (names + descriptions only, not full HTML). |
 
@@ -384,6 +384,23 @@ create_page(
 ```
 
 To add a discussion accordion to that lesson, pass `include_sections: ["discussion"]` and fill `slots.discussion`. The response includes `included_sections` and `omitted_sections` arrays so Claude can confirm what landed in the page.
+
+**Updating an existing lesson page:** use `edit_page_content` with the same template machinery. For example, to add a discussion accordion to a lesson page that doesn't have one:
+
+```
+edit_page_content(
+  course_identifier: "DSGN_9_120251",
+  page_url: "the-water-cycle",
+  template: "lesson",
+  include_sections: ["discussion"],
+  slots: {
+    about: "...", to: "...", concepts: "...", resources: "...",
+    tasks: "...", discussion: "<p>New discussion prompt</p>", assessment: "..."
+  }
+)
+```
+
+The body is rebuilt from the template in place — no duplicate page is created. Important: you must provide ALL slots you want in the result, not just the ones that changed. The MCP doesn't preserve previous slot content from the on-Canvas HTML (the page was wrapped HTML, and parsing it back is fragile). If your skill keeps track of the slot content it generated, that's the source of truth for the rebuild.
 
 #### Assessment template (Franklin preset)
 

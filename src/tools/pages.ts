@@ -54,8 +54,37 @@ const EDIT_PAGE_CONTENT_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   page_url: z.string(),
   title: z.string().optional(),
-  body: z.string().optional(),
+  body: z
+    .string()
+    .optional()
+    .describe(
+      "Page body HTML. For multi-slot templates, pass `slots` instead. Sent verbatim only when no template machinery is engaged.",
+    ),
+  slots: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Named content for multi-slot templates. When provided (or when `template` / `include_sections` / `omit_sections` is provided), the body is REBUILT from the template using these slots — pass ALL slots you want in the new page, not just the ones that changed. Use get_page_content first if you need the current values.",
+    ),
   editing_roles: z.string().optional(),
+  template: z
+    .string()
+    .optional()
+    .describe(
+      "Named page template from the school config (e.g., 'lesson', 'assessment'). Pass to re-apply the template with the supplied slots. Pass 'none' to skip template machinery entirely (only `title`, `body`, `editing_roles` are sent). When omitted with no other template args, behaves as a simple field-update.",
+    ),
+  include_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "When re-applying a template, force-add optional sections that are default-omit (e.g., ['discussion']).",
+    ),
+  omit_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "When re-applying a template, force-remove sections that are default-include (e.g., ['assessment']).",
+    ),
 };
 
 const DELETE_PAGE_INPUT = {
@@ -149,7 +178,8 @@ export function registerPageTools(
     "create_page",
     {
       description:
-        "Create a Canvas wiki page. published is forced false per Franklin School cross-project rule — teacher publishes after review. " +
+        "Create a NEW Canvas wiki page. **For changes to an existing page (adding a section, swapping content, etc.), use edit_page_content instead — create_page on an existing title creates a duplicate with a -2/-3 slug.** " +
+        "published is forced false per Franklin School cross-project rule — teacher publishes after review. " +
         "Body is wrapped in the school's 'default' page template by default; pass template='lesson' / 'assessment' / etc. to choose a specific named template, or template='none' to skip wrapping. " +
         "Multi-slot templates (like 'lesson') need content via slots={about: ..., concepts: ..., ...}; discover slot names via list_page_templates. " +
         "include_sections / omit_sections override the template's default optional-section state per-call.",
@@ -233,7 +263,13 @@ export function registerPageTools(
   server.registerTool(
     "edit_page_content",
     {
-      description: "Update a Canvas wiki page's body, title, or editing_roles. Only sets fields explicitly provided. Does NOT re-apply the school template — pass already-wrapped HTML if you need it, or use create_page for a fresh template-wrapped page.",
+      description:
+        "Update an existing Canvas wiki page. THIS is the tool to use for any change to a page that already exists — do NOT use create_page for that (it would create a duplicate with a -2/-3 slug). " +
+        "Two modes: " +
+        "(1) Simple field update — pass any of `title`, `body`, `editing_roles` and they replace the existing values; nothing else is touched. " +
+        "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the body from the school template (same machinery as create_page). " +
+        "When re-applying a template, pass ALL slots you want in the result, not just the ones that changed — the body is rebuilt from scratch. " +
+        "Pass `template: 'none'` to force simple-field-update mode even if slots/section args are also provided.",
       inputSchema: EDIT_PAGE_CONTENT_INPUT,
     },
     async (input) => {
@@ -242,22 +278,119 @@ export function registerPageTools(
         page_url: string;
         title?: string;
         body?: string;
+        slots?: Record<string, string>;
         editing_roles?: string;
+        template?: string;
+        include_sections?: string[];
+        omit_sections?: string[];
       };
       return safeHandler("edit_page_content", async () => {
         const courseId = await canvas.resolveCourseId(args.course_identifier);
+
+        // Decide whether to engage template machinery
+        const hasTemplateArgs =
+          args.template !== undefined ||
+          args.slots !== undefined ||
+          args.include_sections !== undefined ||
+          args.omit_sections !== undefined;
+        const skipTemplate = args.template === "none";
+        const usingTemplate = hasTemplateArgs && !skipTemplate;
+
         const wikiPagePayload: Record<string, unknown> = {};
-        if (args.title !== undefined) wikiPagePayload.title = args.title;
-        if (args.body !== undefined) wikiPagePayload.body = args.body;
-        if (args.editing_roles !== undefined) wikiPagePayload.editing_roles = args.editing_roles;
-        if (Object.keys(wikiPagePayload).length === 0) {
-          throw new Error("edit_page_content: at least one of title/body/editing_roles must be provided.");
+        let templateInfo: {
+          appliedTemplate: string | null;
+          includedSections: string[];
+          omittedSections: string[];
+          warnings: string[];
+        } | null = null;
+
+        if (usingTemplate) {
+          // Need the title to fill {{title}}; fetch existing if not provided
+          let resolvedTitle = args.title;
+          if (resolvedTitle === undefined) {
+            const current = await canvas.get<CanvasPageLite>(
+              `/api/v1/courses/${courseId}/pages/${encodeURIComponent(args.page_url)}`,
+            );
+            resolvedTitle = current.title;
+          }
+
+          // Fetch course.name only if the chosen template references {{course_name}}
+          let courseName: string | undefined;
+          const templateName = args.template ?? "default";
+          const chosenTemplate = schoolConfig?.pageTemplates?.[templateName];
+          if (chosenTemplate?.html.includes("{{course_name}}")) {
+            try {
+              const course = await canvas.get<CanvasCourseLite>(`/api/v1/courses/${courseId}`);
+              courseName = course.name;
+            } catch {
+              // ignore — {{course_name}} substitutes as empty
+            }
+          }
+
+          const application = applyPageTemplate(
+            schoolConfig,
+            {
+              title: resolvedTitle,
+              body: args.body,
+              slots: args.slots,
+              courseName,
+              courseId,
+              courseUrl: deriveCourseUrl(canvas, courseId),
+            },
+            args.template,
+            {
+              includeSections: args.include_sections,
+              omitSections: args.omit_sections,
+            },
+          );
+          templateInfo = {
+            appliedTemplate: application.appliedTemplate,
+            includedSections: application.includedSections,
+            omittedSections: application.omittedSections,
+            warnings: application.warnings,
+          };
+
+          // Only include the title in the PUT if the caller explicitly passed one.
+          // (We fetched the existing title just to fill {{title}}; we don't want
+          // to overwrite the Canvas title field with a value the caller didn't ask
+          // to change.)
+          if (args.title !== undefined) wikiPagePayload.title = args.title;
+          wikiPagePayload.body = application.body;
+        } else {
+          if (args.title !== undefined) wikiPagePayload.title = args.title;
+          if (args.body !== undefined) wikiPagePayload.body = args.body;
         }
+        if (args.editing_roles !== undefined) wikiPagePayload.editing_roles = args.editing_roles;
+
+        if (Object.keys(wikiPagePayload).length === 0) {
+          throw new Error(
+            "edit_page_content: at least one of title/body/slots/template/include_sections/omit_sections/editing_roles must be provided.",
+          );
+        }
+
         const updated = await canvas.put<CanvasPageLite>(
           `/api/v1/courses/${courseId}/pages/${encodeURIComponent(args.page_url)}`,
           { wiki_page: wikiPagePayload },
         );
-        return jsonResult(trimResponseBody(updated), { summary: `Updated page "${updated.title}".` });
+
+        const responsePayload: Record<string, unknown> = { ...trimResponseBody(updated) };
+        if (templateInfo) {
+          responsePayload.template_applied = templateInfo.appliedTemplate;
+          if (templateInfo.includedSections.length > 0)
+            responsePayload.included_sections = templateInfo.includedSections;
+          if (templateInfo.omittedSections.length > 0)
+            responsePayload.omitted_sections = templateInfo.omittedSections;
+          if (templateInfo.warnings.length > 0) responsePayload.warnings = templateInfo.warnings;
+        }
+
+        const summary =
+          `Updated page "${updated.title}"` +
+          (templateInfo?.appliedTemplate ? ` (template: ${templateInfo.appliedTemplate})` : "") +
+          (templateInfo && templateInfo.omittedSections.length > 0
+            ? `, omitted: ${templateInfo.omittedSections.join(", ")}`
+            : "") +
+          ".";
+        return jsonResult(responsePayload, { summary });
       });
     },
   );

@@ -164,7 +164,7 @@ describe("registerPageTools", () => {
     expect(payload.published).toBe(false);
   });
 
-  it("edit_page_content only sends fields explicitly provided", async () => {
+  it("edit_page_content only sends fields explicitly provided (simple mode)", async () => {
     const { client, requests } = buildMockCanvas([
       { status: 200, data: { url: "intro", title: "Intro updated" } },
     ]);
@@ -183,6 +183,25 @@ describe("registerPageTools", () => {
     expect(payload).not.toHaveProperty("body");
   });
 
+  it("edit_page_content with template='none' stays in simple mode even if slots are also passed", async () => {
+    const { client, requests } = buildMockCanvas([
+      { status: 200, data: { url: "x", title: "x" } },
+    ]);
+    const harness = buildToolHarness();
+    registerPageTools(harness.server as never, client, templatedConfig);
+
+    await harness.call("edit_page_content", {
+      course_identifier: 60366,
+      page_url: "x",
+      body: "<p>raw</p>",
+      template: "none",
+      slots: { about: "should be ignored" },
+    });
+    const payload = (requests[0]?.data as { wiki_page: Record<string, unknown> }).wiki_page;
+    expect(payload.body).toBe("<p>raw</p>");
+    expect(payload).not.toHaveProperty("template_applied");
+  });
+
   it("edit_page_content errors when no fields are provided", async () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
@@ -193,7 +212,7 @@ describe("registerPageTools", () => {
       page_url: "intro",
     })) as ToolResponse;
     expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toMatch(/at least one of title\/body\/editing_roles/);
+    expect(result.content?.[0]?.text).toMatch(/at least one of title\/body\/slots\/template/);
   });
 
   describe("page templates", () => {
@@ -538,6 +557,106 @@ describe("registerPageTools", () => {
       // No leftover slot tokens
       expect(payload.body).not.toContain("{{slot:");
       expect(payload.body).not.toContain("{{course_");
+    });
+
+    it("edit_page_content re-applies the template + slots in place (no duplicate page)", async () => {
+      const { client, requests } = buildMockCanvas([
+        // course details fetch for {{course_name}}
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        // page PUT response
+        { status: 200, data: { url: "lesson-1", title: "Lesson 1", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      const result = (await harness.call("edit_page_content", {
+        course_identifier: 60366,
+        page_url: "lesson-1",
+        title: "Lesson 1",
+        template: "multiSlot",
+        slots: {
+          about: "<p>Updated about</p>",
+          to: "<p>Updated skills</p>",
+          discussion: "<p>Now with a discussion</p>",
+          assessment: "<p>Quiz on Friday</p>",
+        },
+        include_sections: ["discussion"],
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      // PUT (not POST) — updating existing page, no duplicate created
+      expect(requests[1]?.method).toBe("PUT");
+      expect(requests[1]?.url).toBe("/api/v1/courses/60366/pages/lesson-1");
+      const payload = (requests[1]?.data as { wiki_page: { body: string; title?: string } }).wiki_page;
+      // Title was passed → goes through
+      expect(payload.title).toBe("Lesson 1");
+      // Template was applied — slot tokens substituted
+      expect(payload.body).toContain("<p>Updated about</p>");
+      expect(payload.body).toContain("<p>Now with a discussion</p>");
+      expect(payload.body).toContain('data-course="Design 9"');
+      // Result surfaces template metadata
+      expect(result.structuredContent?.template_applied).toBe("multiSlot");
+      expect(result.structuredContent?.included_sections).toEqual(
+        expect.arrayContaining(["discussion", "assessment"]),
+      );
+    });
+
+    it("edit_page_content fetches the existing title when not provided (to fill {{title}} token)", async () => {
+      const { client, requests } = buildMockCanvas([
+        // GET page (we need the title for {{title}})
+        { status: 200, data: { url: "lesson-1", title: "Existing Lesson Title", published: false } },
+        // course details for {{course_name}}
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        // PUT response
+        { status: 200, data: { url: "lesson-1", title: "Existing Lesson Title", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      await harness.call("edit_page_content", {
+        course_identifier: 60366,
+        page_url: "lesson-1",
+        template: "multiSlot",
+        slots: { about: "x", to: "x" },
+      });
+
+      // First request: GET to fetch existing title
+      expect(requests[0]?.method).toBe("GET");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages/lesson-1");
+
+      // PUT was sent — title token was filled from the GET'd title, but the Canvas title
+      // field is NOT updated (we don't overwrite something the caller didn't pass)
+      const putRequest = requests[requests.length - 1];
+      expect(putRequest?.method).toBe("PUT");
+      const payload = (putRequest?.data as { wiki_page: Record<string, unknown> }).wiki_page;
+      expect(payload).not.toHaveProperty("title");
+      // But {{title}} in the template HTML should have been replaced with the existing title
+      expect(payload.body).toContain("<h1>Existing Lesson Title</h1>");
+    });
+
+    it("edit_page_content with only include_sections (no slots) still engages template mode", async () => {
+      // This is the 'just add the discussion accordion' case. Note: caller still has to
+      // provide all slots in the rebuilt body, because we don't preserve previous slot
+      // content from the on-Canvas HTML.
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { url: "lesson-1", title: "Lesson 1", published: false } }, // GET title
+        { status: 200, data: { id: 60366, name: "Design 9" } }, // course details
+        { status: 200, data: { url: "lesson-1", title: "Lesson 1", published: false } }, // PUT
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+
+      await harness.call("edit_page_content", {
+        course_identifier: 60366,
+        page_url: "lesson-1",
+        template: "multiSlot",
+        include_sections: ["discussion"],
+      });
+
+      const putRequest = requests[requests.length - 1];
+      const payload = (putRequest?.data as { wiki_page: { body: string } }).wiki_page;
+      // discussion section is now present (rendered as empty since no slots passed)
+      expect(payload.body).toContain('class="discussion"');
     });
 
     it("list_page_templates surfaces slot + section metadata (descriptions only, no HTML)", async () => {
