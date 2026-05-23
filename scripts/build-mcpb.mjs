@@ -77,12 +77,13 @@ async function main() {
   log("staging configs/");
   await copyDir(path.join(repoRoot, "configs"), path.join(stagingDir, "configs"));
 
-  // 3c. Stage manifest, package.json, README
-  log("staging manifest + package.json + README");
+  // 3c. Stage manifest, package.json, README, icon
+  log("staging manifest + package.json + README + icon");
   await copyFile(path.join(repoRoot, "manifest.json"), path.join(stagingDir, "manifest.json"));
   await copyFile(path.join(repoRoot, "package.json"), path.join(stagingDir, "package.json"));
   await copyFile(path.join(repoRoot, "package-lock.json"), path.join(stagingDir, "package-lock.json"));
   await copyFile(path.join(repoRoot, "README.md"), path.join(stagingDir, "README.md"));
+  await copyFile(path.join(repoRoot, "icon.png"), path.join(stagingDir, "icon.png"));
 
   // 3d. Install production-only deps in the staging dir
   log("installing production node_modules (npm ci --omit=dev)");
