@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "canvas-mcp",
   "display_name": "Canvas LMS",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Canvas LMS MCP server with FERPA-aware anonymization, account-admin tools, grading suite, and a TypeScript code-execution escape hatch.",
   "long_description": "Drop-in MCP server for Canvas LMS. Lists/creates Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk with dry-run + bounded concurrency), and exposes execute_typescript for token-efficient bulk operations against a curated code_api/. Every student-data path defaults to pseudonymized output (Student 1, Student 2, …) with a per-course persistent map on disk so longitudinal artifacts stay coherent. De-anonymization is gated by the operator — Claude cannot turn it off without an explicit env opt-in. Ships an optional Franklin School preset (9 TD Competencies) that other schools can swap by pointing SCHOOL_CONFIG at their own JSON file.",
   "author": {
@@ -23,8 +23,7 @@
         "CANVAS_ACCOUNT_ID": "self",
         "SCHOOL_CONFIG": "${user_config.school_config}",
         "CANVAS_MCP_ALLOW_DEANONYMIZE": "${user_config.allow_deanonymize}",
-        "TS_SANDBOX_BLOCK_OUTBOUND": "true",
-        "TS_SANDBOX_ALLOWLIST_HOSTS": "${user_config.ts_sandbox_allowlist_hosts}"
+        "TS_SANDBOX_BLOCK_OUTBOUND": "true"
       }
     }
   },
@@ -32,7 +31,7 @@
     "canvas_api_url": {
       "type": "string",
       "title": "Canvas URL",
-      "description": "Your school's Canvas address, e.g. https://franklin.instructure.com (no trailing slash, no /api/v1).",
+      "description": "Your school's Canvas address, e.g. https://yourschool.instructure.com",
       "required": true
     },
     "canvas_api_token": {
@@ -42,23 +41,17 @@
       "required": true,
       "sensitive": true
     },
-    "school_config": {
-      "type": "file",
-      "title": "School config (optional)",
-      "description": "Optional JSON file describing your school's competency framework. Franklin teachers: point at ${__dirname}/configs/franklin.json to load Franklin's 9 TD Competencies. Other schools: copy ${__dirname}/configs/example.json and edit. Leave blank to skip — every other tool works without it.",
-      "required": false
-    },
     "allow_deanonymize": {
       "type": "string",
-      "title": "Allow real student names in tool output? (leave OFF unless you need it)",
+      "title": "Allow real student names in tool output? (leave false unless you need it)",
       "description": "By default this MCP returns pseudonyms (Student 1, Student 2, …) for every student — teachers/TAs/admins always come through verbatim. This is the FERPA-safe default. Type 'true' here ONLY for a workflow that genuinely needs real names (e.g., looking up a Canvas user id from a student's actual name). Restart Claude Desktop after changing. Flip it back to blank when you're done.",
       "required": false,
       "default": "false"
     },
-    "ts_sandbox_allowlist_hosts": {
-      "type": "string",
-      "title": "execute_typescript: extra allowed websites (LEAVE BLANK)",
-      "description": "Advanced. execute_typescript is the tool Claude uses for bulk operations like 'grade every submission in this assignment'. The code it runs is allowed to talk to your Canvas server and nothing else — this protects against a hidden instruction in a student submission tricking Claude into leaking your Canvas token to a malicious website. If a legitimate workflow needs a different host (e.g., 'api.github.com' to read student code repos), add it here as a comma-separated list. 99% of teachers should leave this BLANK.",
+    "school_config": {
+      "type": "file",
+      "title": "School config (optional)",
+      "description": "Optional JSON file describing your school's competency framework. Franklin teachers: point at ${__dirname}/configs/franklin.json to load Franklin's 9 TD Competencies. Other schools: copy ${__dirname}/configs/example.json and edit. Leave blank to skip — every other tool works without it.",
       "required": false
     }
   },
