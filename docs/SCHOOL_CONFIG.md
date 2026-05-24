@@ -204,7 +204,7 @@ Any string key works (`"weekly_recap"`, `"unit_overview"`, etc.). The names `"de
 
 ## Franklin reference templates
 
-The bundled Franklin preset has four templates: `default` (placeholder for now), `lesson`, `assessment`, and `module_outcomes`. The schemas below are useful if you're forking the Franklin preset for another school.
+The bundled Franklin preset has four templates: `default` (header chrome + freeform `{{body}}` for ad-hoc pages — exit tickets, reflections, announcements), `lesson`, `assessment`, and `module_outcomes`. All four wrap their content in the same Franklin chrome (banner + logo + course nav) — see `docs/solutions/conventions/franklin-page-template-chrome-convention-2026-05-24.md` for the convention. The schemas below are useful if you're forking the Franklin preset for another school.
 
 ### `lesson` template
 

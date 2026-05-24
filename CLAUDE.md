@@ -22,7 +22,7 @@ The MCP core is generic. The only acceptable boundary for school-specific data i
 - If it's federal law (FERPA), Canvas API convention, or a sensible default for any school — it's generic. Keep it in core.
 - If only Franklin (or a specific school) would set it — extend `SchoolConfigSchema`, update `configs/franklin.json` AND `configs/example.json`, add tests for both the configured and unconfigured paths.
 
-What's currently in the school config: `competencyFramework`, `academicCalendar` (reserved), `pageTemplates` (reserved).
+What's currently in the school config: `competencyFramework`, `pageTemplates`, `academicCalendar` (reserved).
 
 What's NOT (and must stay generic): FERPA defaults, `CANVAS_MCP_ALLOW_DEANONYMIZE`, course-code preference, `published: false`, course-code cache, pagination/retry/error handling.
 
@@ -61,6 +61,10 @@ src/
         ├── courses/        # listCourses, getCourseDetails
         └── grading/        # gradeWithRubric, bulkGrade
 ```
+
+## Documented solutions
+
+`docs/solutions/` — documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 
 ## Conventions
 
