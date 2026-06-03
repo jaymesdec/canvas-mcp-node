@@ -10,6 +10,7 @@ import { CanvasClient } from "./canvasClient.js";
 import { Anonymizer } from "./anonymizer.js";
 import { loadSchoolConfig, type SchoolConfig } from "./schoolConfig.js";
 import { registerCompetencyTools } from "./tools/competencies.js";
+import { registerSchoolInfoTools } from "./tools/school.js";
 import { registerCourseTools } from "./tools/courses.js";
 import { registerModuleTools } from "./tools/modules.js";
 import { registerPageTools } from "./tools/pages.js";
@@ -23,7 +24,7 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.3.15";
+const SERVER_VERSION = "0.3.16";
 
 /**
  * Where the .mcpb-bundled franklin.json lives relative to the compiled
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
   registerGradingTools(server, canvas);
   registerAnonymizationTools(server, canvas, anonymizer);
   registerCompetencyTools(server, schoolConfig);
+  registerSchoolInfoTools(server, schoolConfig);
   registerCodeExecutionTools(server, anonymizer);
 
   const transport = new StdioServerTransport();

@@ -456,6 +456,7 @@ export function registerPageTools(
           return {
             name,
             description: template.description ?? null,
+            title_format: template.titleFormat ?? null,
             is_default: name === "default",
             slots,
             sections,
@@ -470,7 +471,8 @@ export function registerPageTools(
             usage_hint:
               "create_page(template: '<name>', slots: {...}, include_sections: [...], omit_sections: [...]). " +
               "For multi-slot templates, populate slots with one entry per slot name from the template's `slots` list. " +
-              "Optional sections obey their default include/omit state unless override arrays say otherwise.",
+              "Optional sections obey their default include/omit state unless override arrays say otherwise. " +
+              "When `title_format` is set on a template, generate the page title to that format ({var} placeholders are filled by the calling skill); when null, propose your own title.",
           },
           { summary: `${entries.length} page template(s) configured: ${entries.map((entry) => entry.name).join(", ")}.` },
         );

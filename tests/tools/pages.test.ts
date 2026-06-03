@@ -19,6 +19,7 @@ const templatedConfig: SchoolConfig = {
     },
     lesson: {
       description: "Lesson page",
+      titleFormat: "Lesson: {name}",
       html: "<article class=\"lesson\"><h2>{{title}}</h2><section>{{body}}</section></article>",
     },
     assessment: {
@@ -371,6 +372,18 @@ describe("registerPageTools", () => {
         expect(entry).not.toHaveProperty("html");
       }
       expect(result.structuredContent?.default_applied_automatically).toBe(true);
+    });
+
+    it("list_page_templates surfaces title_format when configured and null otherwise", async () => {
+      const { client } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("list_page_templates")) as ToolResponse;
+      const templates = result.structuredContent?.templates as Array<Record<string, unknown>>;
+      const byName = Object.fromEntries(templates.map((entry) => [entry.name as string, entry]));
+      expect(byName.lesson?.title_format).toBe("Lesson: {name}");
+      expect(byName.default?.title_format).toBeNull();
+      expect(byName.assessment?.title_format).toBeNull();
     });
 
     it("list_page_templates returns a 'not configured' response when no templates exist", async () => {

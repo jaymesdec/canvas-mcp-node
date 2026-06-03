@@ -23,7 +23,9 @@
   },
   "academicCalendar": {
     "weeksPerYear": 36,
-    "termNames": ["Fall", "Spring"]
+    "termNames": ["Fall", "Spring"],
+    "classPeriodMinutes": 50,
+    "yearStart": "2026-08-31"
   },
   "pageTemplates": {
     "default": {
@@ -32,6 +34,7 @@
     },
     "lesson": {
       "description": "Optional lesson-page template. Add additional named templates like this for content-type-specific wrapping.",
+      "titleFormat": "Lesson: {name}",
       "html": "<div class=\"example-lesson\">\n  <h1>{{title}}</h1>\n  <section class=\"lesson-body\">{{body}}</section>\n</div>"
     }
   }

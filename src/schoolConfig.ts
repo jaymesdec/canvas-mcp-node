@@ -53,6 +53,12 @@ const PageTemplateSchema = z.object({
     .describe(
       "What this template is for, in a sentence. Surfaced by list_page_templates so Claude can pick the right one without seeing the HTML.",
     ),
+  titleFormat: z
+    .string()
+    .optional()
+    .describe(
+      "School-specific format string for page titles created with this template. Uses {var} placeholders that the calling skill fills (e.g., '{type}: {name} [Week {week}] {percent}% {fair_flag}{final_flag}ASMT'). Surfaced via list_page_templates so skills generate titles to the school's convention. Omit when no convention applies (generic schools can leave it off and let the skill propose a title).",
+    ),
   html: z
     .string()
     .min(1)
@@ -86,9 +92,47 @@ export const SchoolConfigSchema = z.object({
     .object({
       weeksPerYear: z.number().int().positive().optional(),
       termNames: z.array(z.string()).optional(),
+      classPeriodMinutes: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          "Default class period length in minutes (e.g., 50). Used by lesson-planning skills to set Stage-3 arc timing without asking the teacher. Omit if periods vary.",
+        ),
+      yearStart: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional()
+        .describe(
+          "ISO date (YYYY-MM-DD) of the first day of classes for the school year. Lets skills compute the academic week number for a given due date. Week 1 = yearStart through yearStart+6 days.",
+        ),
     })
     .optional(),
 });
+
+/**
+ * Compute the academic week number (1..weeksPerYear) a given date falls in,
+ * using yearStart from the school config's academic calendar. Returns null if
+ * yearStart isn't configured. Clamps to [1, weeksPerYear] when configured.
+ *
+ * Breaks (winter, spring) are NOT skipped — Week 14 is calendar-week 14 since
+ * yearStart, regardless of whether classes meet that week. Teachers read the
+ * week number as a sequence position; the title format isn't trying to
+ * communicate "this is the 14th week of instruction" precisely.
+ */
+export function computeAcademicWeek(
+  date: Date,
+  calendar: NonNullable<SchoolConfig["academicCalendar"]> | undefined,
+): number | null {
+  if (!calendar?.yearStart) return null;
+  const start = new Date(`${calendar.yearStart}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const diffMs = date.getTime() - start.getTime();
+  const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
+  const max = calendar.weeksPerYear ?? Infinity;
+  return Math.max(1, Math.min(week, max));
+}
 
 export type Competency = z.infer<typeof CompetencySchema>;
 export type CompetencyFramework = z.infer<typeof CompetencyFrameworkSchema>;

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { loadSchoolConfig } from "../src/schoolConfig.js";
+import { computeAcademicWeek, loadSchoolConfig } from "../src/schoolConfig.js";
 
 let tmpRoot: string;
 let warnings: string[];
@@ -171,5 +171,71 @@ describe("loadSchoolConfig", () => {
     });
     expect(warnings).toEqual([]);
     expect(result).not.toBeNull();
+  });
+});
+
+describe("computeAcademicWeek", () => {
+  it("returns 1 for the yearStart date itself", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-08-24T12:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(1);
+  });
+
+  it("returns 1 for the first 6 days after yearStart", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-08-30T23:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(1);
+  });
+
+  it("returns 2 starting from day 7 after yearStart", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-08-31T00:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(2);
+  });
+
+  it("returns the correct week for a date several weeks in", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-11-02T00:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(11);
+  });
+
+  it("clamps to weeksPerYear when the date is past year-end", () => {
+    expect(
+      computeAcademicWeek(new Date("2030-01-01T00:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(35);
+  });
+
+  it("clamps to 1 when the date is before yearStart", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-01-01T00:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+      }),
+    ).toBe(1);
+  });
+
+  it("returns null when yearStart is missing", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-10-01T00:00:00Z"), { weeksPerYear: 35 }),
+    ).toBeNull();
+  });
+
+  it("returns null when calendar is undefined", () => {
+    expect(computeAcademicWeek(new Date(), undefined)).toBeNull();
   });
 });
