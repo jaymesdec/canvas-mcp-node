@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "canvas-mcp",
   "display_name": "Canvas LMS",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "icon": "icon.png",
   "description": "FERPA compliant MCP server for Canvas LMS.",
   "long_description": "FERPA compliant MCP server for Canvas LMS. Read, update, and write Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk). All from Claude Desktop.",
@@ -22,7 +22,6 @@
         "CANVAS_API_URL": "${user_config.canvas_api_url}",
         "CANVAS_API_TOKEN": "${user_config.canvas_api_token}",
         "CANVAS_ACCOUNT_ID": "self",
-        "SCHOOL_CONFIG": "${user_config.school_config}",
         "CANVAS_MCP_ALLOW_DEANONYMIZE": "${user_config.allow_deanonymize}",
         "TS_SANDBOX_BLOCK_OUTBOUND": "true"
       }
@@ -32,8 +31,9 @@
     "canvas_api_url": {
       "type": "string",
       "title": "Canvas URL",
-      "description": "Your school's Canvas address, e.g. https://yourschool.instructure.com",
-      "required": true
+      "description": "Franklin's Canvas address. Pre-filled — leave as-is unless you've been told otherwise.",
+      "required": true,
+      "default": "https://franklinjc.instructure.com"
     },
     "canvas_api_token": {
       "type": "string",
@@ -48,12 +48,6 @@
       "description": "By default this MCP returns pseudonyms (Student 1, Student 2, …) for every student — teachers/TAs/admins always come through verbatim. This is the FERPA-safe default. Type 'true' here ONLY for a workflow that genuinely needs real names (e.g., looking up a Canvas user id from a student's actual name). Restart Claude Desktop after changing. Flip it back to blank when you're done.",
       "required": false,
       "default": "false"
-    },
-    "school_config": {
-      "type": "file",
-      "title": "School config (other schools only — leave blank for Franklin defaults)",
-      "description": "Leave BLANK to use the bundled Franklin preset (competency framework + institutional page templates load automatically). Other schools: copy configs/example.json out of the unpacked bundle, edit it for your competencies + templates, and pick your edited file here. The server falls back to the bundled Franklin preset if this file isn't readable.",
-      "required": false
     }
   },
   "compatibility": {
