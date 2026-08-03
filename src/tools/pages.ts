@@ -264,7 +264,7 @@ export function registerPageTools(
     "edit_page_content",
     {
       description:
-        "Update an existing Canvas wiki page. THIS is the tool to use for any change to a page that already exists — do NOT use create_page for that (it would create a duplicate with a -2/-3 slug). " +
+        "Update an existing Canvas wiki page (use this, not create_page, for any change to a page that already exists). " +
         "Two modes: " +
         "(1) Simple field update — pass any of `title`, `body`, `editing_roles` and they replace the existing values; nothing else is touched. " +
         "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the body from the school template (same machinery as create_page). " +
