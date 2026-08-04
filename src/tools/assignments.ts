@@ -39,6 +39,22 @@ const SUBMISSION_TYPES_DESCRIPTION =
   "Allowed Canvas values: online_upload, online_text_entry, online_url, online_quiz, media_recording, " +
   "student_annotation, on_paper, external_tool, discussion_topic, wiki_page, none, not_graded.";
 
+const ASSESSMENT_TEMPLATE_NAME = "assessment";
+
+const FINAL_ASMT_PARAM = z
+  .boolean()
+  .optional()
+  .describe(
+    "Whether this assessment counts toward the final grade — adds the FINAL tag to the title. REQUIRED when template:'assessment': ask the teacher, never assume.",
+  );
+
+const FAIR_ASMT_PARAM = z
+  .boolean()
+  .optional()
+  .describe(
+    "Whether this assessment is published to the school's continuous reporting tool where parents see the assessment, grade, graded rubric, and comments — adds the FAIR tag to the title. REQUIRED when template:'assessment': ask the teacher, never assume.",
+  );
+
 const CREATE_ASSIGNMENT_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   name: z.string(),
@@ -59,6 +75,8 @@ const CREATE_ASSIGNMENT_INPUT = {
     .describe(
       "Named page template from the school config (e.g., 'assessment', 'default'). Omit to apply 'default' to the description. Pass 'none' to skip wrapping. Use list_page_templates to discover what's available.",
     ),
+  final_asmt: FINAL_ASMT_PARAM,
+  fair_asmt: FAIR_ASMT_PARAM,
   slots: z
     .record(z.string(), z.string())
     .optional()
@@ -100,6 +118,8 @@ const UPDATE_ASSIGNMENT_INPUT = {
     .describe(
       "Named page template from the school config (e.g., 'assessment'). Pass to rebuild the description from the template with the supplied slots. Pass 'none' to skip template machinery entirely (description sent verbatim). When omitted with no other template args, behaves as a simple field-update.",
     ),
+  final_asmt: FINAL_ASMT_PARAM,
+  fair_asmt: FAIR_ASMT_PARAM,
   slots: z
     .record(z.string(), z.string())
     .optional()
@@ -215,6 +235,54 @@ async function fetchCourseNameIfTemplateNeedsIt(
     // ignore — {{course_name}} substitutes as empty
     return undefined;
   }
+}
+
+function assertAssessmentFlagsProvided(
+  toolName: string,
+  finalAsmt: boolean | undefined,
+  fairAsmt: boolean | undefined,
+): void {
+  if (finalAsmt !== undefined && fairAsmt !== undefined) return;
+  throw new Error(
+    `${toolName}: template 'assessment' requires final_asmt and fair_asmt. Ask the teacher: is this a FINAL assessment (counts toward the final grade)? Is it a FAIR assessment (published to the continuous reporting tool for parents, including grade, rubric, and comments)? Then retry with both flags.`,
+  );
+}
+
+// {fair_flag}{final_flag} order from the assessment titleFormat — FAIR before FINAL.
+function suggestedTitleFlags(fairAsmt: boolean, finalAsmt: boolean): string {
+  return `${fairAsmt ? "FAIR " : ""}${finalAsmt ? "FINAL " : ""}`;
+}
+
+function assessmentTitleWarnings(name: string, fairAsmt: boolean, finalAsmt: boolean): string[] {
+  const warnings: string[] = [];
+  if (!name.trimEnd().endsWith("ASMT")) {
+    warnings.push(
+      `Assessment name "${name}" does not end with "ASMT" — Franklin assessment titles end with "{fair_flag}{final_flag}ASMT". The name is the teacher's call; flagging in case it was unintentional.`,
+    );
+  }
+  const hasFinalToken = /\bFINAL\b/.test(name);
+  const hasFairToken = /\bFAIR\b/.test(name);
+  if (finalAsmt && !hasFinalToken) {
+    warnings.push(
+      `final_asmt is true but the name "${name}" lacks the FINAL tag — expected the title to include "FINAL" before "ASMT".`,
+    );
+  }
+  if (!finalAsmt && hasFinalToken) {
+    warnings.push(
+      `final_asmt is false but the name "${name}" contains the FINAL tag — parents/students will read it as counting toward the final grade.`,
+    );
+  }
+  if (fairAsmt && !hasFairToken) {
+    warnings.push(
+      `fair_asmt is true but the name "${name}" lacks the FAIR tag — expected the title to include "FAIR" before "ASMT".`,
+    );
+  }
+  if (!fairAsmt && hasFairToken) {
+    warnings.push(
+      `fair_asmt is false but the name "${name}" contains the FAIR tag — it will read as published to the continuous reporting tool when it is not.`,
+    );
+  }
+  return warnings;
 }
 
 export function registerAssignmentTools(
@@ -351,6 +419,7 @@ export function registerAssignmentTools(
       description:
         "Create a new Canvas assignment as a draft (published is forced false per the cross-project never-auto-publish rule — teacher publishes after review). Bypasses the course-code cache so a rename mid-session can't misroute the write. " +
         "The description is wrapped in the school's 'default' page template automatically; pass template='assessment' for Franklin assessments — discover slot names and the ASMT title format via list_page_templates — or template='none' to skip wrapping. " +
+        "template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag) and fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag): ask the teacher both questions, never assume. " +
         "Multi-slot templates need content via slots={...}; include_sections / omit_sections override the template's default optional-section state per-call. " +
         SUBMISSION_TYPES_DESCRIPTION,
       inputSchema: CREATE_ASSIGNMENT_INPUT,
@@ -358,6 +427,11 @@ export function registerAssignmentTools(
     async (input) => {
       const args = input as z.infer<z.ZodObject<typeof CREATE_ASSIGNMENT_INPUT>>;
       return safeHandler("create_assignment", async () => {
+        const usingAssessmentTemplate = args.template === ASSESSMENT_TEMPLATE_NAME;
+        if (usingAssessmentTemplate) {
+          assertAssessmentFlagsProvided("create_assignment", args.final_asmt, args.fair_asmt);
+        }
+
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
         const assignmentPayload: Record<string, unknown> = { name: args.name, published: false };
@@ -407,8 +481,16 @@ export function registerAssignmentTools(
             responsePayload.included_sections = templateApplication.includedSections;
           if (templateApplication.omittedSections.length > 0)
             responsePayload.omitted_sections = templateApplication.omittedSections;
-          if (templateApplication.warnings.length > 0) responsePayload.warnings = templateApplication.warnings;
         }
+
+        const warnings: string[] = [...(templateApplication?.warnings ?? [])];
+        if (usingAssessmentTemplate) {
+          const fairAsmt = args.fair_asmt === true;
+          const finalAsmt = args.final_asmt === true;
+          responsePayload.suggested_title_flags = suggestedTitleFlags(fairAsmt, finalAsmt);
+          warnings.push(...assessmentTitleWarnings(args.name, fairAsmt, finalAsmt));
+        }
+        if (warnings.length > 0) responsePayload.warnings = warnings;
 
         return jsonResult(responsePayload, {
           summary:
@@ -427,6 +509,7 @@ export function registerAssignmentTools(
         "Update fields on an existing Canvas assignment. Sends only the provided fields and never touches the published state. " +
         "Two modes: (1) Simple field update — provided fields (description included) are sent verbatim. " +
         "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the description from the school template (same machinery as create_assignment; pass template='assessment' for Franklin assessments — discover slot names via list_page_templates). " +
+        "Re-applying template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag) and fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag): ask the teacher both questions, never assume. " +
         "When re-applying a template, pass ALL slots you want in the result, not just the ones that changed — the description is rebuilt from scratch. Pass template='none' to force simple mode. " +
         "Caveat: Canvas silently ignores submission_types changes once an assignment has student submissions — the response is checked and a warning is returned when that happens. " +
         SUBMISSION_TYPES_DESCRIPTION,
@@ -450,19 +533,23 @@ export function registerAssignmentTools(
           args.include_sections !== undefined ||
           args.omit_sections !== undefined;
         const usingTemplate = hasTemplateArgs && args.template !== "none";
+        const usingAssessmentTemplate = usingTemplate && args.template === ASSESSMENT_TEMPLATE_NAME;
 
         if (Object.keys(assignmentPayload).length === 0 && !usingTemplate) {
           throw new Error(
             "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types) or template args (template/slots/include_sections/omit_sections).",
           );
         }
+        if (usingAssessmentTemplate) {
+          assertAssessmentFlagsProvided("update_assignment", args.final_asmt, args.fair_asmt);
+        }
 
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
         let templateApplication: ReturnType<typeof applyPageTemplate> | null = null;
+        let resolvedName = args.name;
         if (usingTemplate) {
           // Need the name to fill {{title}}; fetch existing if not being updated
-          let resolvedName = args.name;
           if (resolvedName === undefined) {
             const current = await canvas.get<CanvasAssignment>(
               `/api/v1/courses/${courseId}/assignments/${args.assignment_id}`,
@@ -496,6 +583,13 @@ export function registerAssignmentTools(
         );
 
         const warnings: string[] = [...(templateApplication?.warnings ?? [])];
+        let suggestedFlags: string | undefined;
+        if (usingAssessmentTemplate) {
+          const fairAsmt = args.fair_asmt === true;
+          const finalAsmt = args.final_asmt === true;
+          suggestedFlags = suggestedTitleFlags(fairAsmt, finalAsmt);
+          warnings.push(...assessmentTitleWarnings(resolvedName ?? updated.name ?? "", fairAsmt, finalAsmt));
+        }
         let submissionTypesIgnored = false;
         if (
           args.submission_types !== undefined &&
@@ -522,6 +616,7 @@ export function registerAssignmentTools(
           if (templateApplication.omittedSections.length > 0)
             responsePayload.omitted_sections = templateApplication.omittedSections;
         }
+        if (suggestedFlags !== undefined) responsePayload.suggested_title_flags = suggestedFlags;
         if (warnings.length > 0) responsePayload.warnings = warnings;
 
         return jsonResult(responsePayload, {

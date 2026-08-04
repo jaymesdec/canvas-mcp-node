@@ -32,7 +32,7 @@ Setup: `npm run build`, point your `claude_desktop_config.json` at `dist/index.j
 
 * [ ] **C4.** Delete the test assignment **in the Canvas UI** — `delete_assignment` is deliberately excluded (grade-bearing object).
 
-* [ ] **C5.** "Create an assessment called 'MCP Test ASMT' using the assessment template with these requirements: \[a few bullets]." → Check Canvas: the description shows Franklin chrome + the assessment sections. Then: "Create a quick assignment called 'MCP Plain Test' with a one-line description." → description shows the default chrome wrap.
+* [ ] **C5.** "Create an assessment called 'MCP Test ASMT' using the assessment template with these requirements: \[a few bullets]." → Expect Claude to **ask before creating**: "Is this a FINAL assessment (counts toward the final grade)? Is it a FAIR assessment (published to the continuous reporting tool for parents)?" — answer one yes and one no. Check Canvas: the description shows Franklin chrome + the assessment sections, and the title carries the matching FAIR/FINAL tags before "ASMT" (or Claude relays the title-mismatch warning). Then: "Create a quick assignment called 'MCP Plain Test' with a one-line description." → no FAIR/FINAL questions; description shows the default chrome wrap.
 
 ## D. Quiz loop (Classic Quizzes)
 

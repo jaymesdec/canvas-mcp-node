@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "canvas-mcp",
   "display_name": "Canvas LMS",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "icon": "icon.png",
   "description": "FERPA compliant MCP server for Canvas LMS.",
   "long_description": "FERPA compliant MCP server for Canvas LMS. Read, update, and write Canvas content (courses, modules, pages, quizzes, assignments, rubrics), reads + grades submissions (single and bulk). All from Claude Desktop.",

@@ -406,6 +406,7 @@ describe("registerAssignmentTools", () => {
       const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
       expect(payload.description).toBe('<div class="wrap"><h1>Essay 1</h1><p>Write an essay.</p></div>');
       expect(parseJsonResult(result).template_applied).toBe("default");
+      expect(parseJsonResult(result)).not.toHaveProperty("suggested_title_flags");
     });
 
     it("create_assignment with template='assessment' substitutes slot content", async () => {
@@ -419,6 +420,8 @@ describe("registerAssignmentTools", () => {
         course_identifier: 60366,
         name: "Watershed ASMT",
         template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
         slots: {
           requirements: "<p>20 multiple-choice questions.</p>",
           grading: "<p>1 point each.</p>",
@@ -431,6 +434,8 @@ describe("registerAssignmentTools", () => {
       expect(payload.description).toContain('<section class="grading"><p>1 point each.</p></section>');
       expect(payload.description).not.toContain("{{slot:");
       expect(parseJsonResult(result).template_applied).toBe("assessment");
+      expect(parseJsonResult(result).suggested_title_flags).toBe("");
+      expect(parseJsonResult(result)).not.toHaveProperty("warnings");
     });
 
     it("create_assignment with template='none' sends the description verbatim", async () => {
@@ -516,6 +521,8 @@ describe("registerAssignmentTools", () => {
         assignment_id: 555,
         name: "Watershed ASMT v2",
         template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
         slots: {
           requirements: "<p>Updated requirements.</p>",
           grading: "<p>Updated grading.</p>",
@@ -546,6 +553,8 @@ describe("registerAssignmentTools", () => {
         course_identifier: 60366,
         assignment_id: 555,
         template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -557,6 +566,189 @@ describe("registerAssignmentTools", () => {
       // Name was fetched only to fill {{title}} — the Canvas name field is not updated.
       expect(payload).not.toHaveProperty("name");
       expect(payload.description).toContain("<h2>Existing ASMT Name</h2>");
+    });
+  });
+
+  describe("FAIR/FINAL assessment flags", () => {
+    it("create_assignment with template='assessment' but no flags fails closed with zero Canvas calls", async () => {
+      const { client, requests } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("final_asmt");
+      expect(result.content?.[0]?.text).toContain("fair_asmt");
+      expect(result.content?.[0]?.text).toMatch(/[Aa]sk the teacher/);
+      expect(requests).toHaveLength(0);
+    });
+
+    it("create_assignment with only one flag still fails closed", async () => {
+      const { client, requests } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        final_asmt: true,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("fair_asmt");
+      expect(requests).toHaveLength(0);
+    });
+
+    it("create_assignment with both flags true suggests 'FAIR FINAL ' and warns when the name lacks both tags", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 710, name: "Watershed ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        final_asmt: true,
+        fair_asmt: true,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title_flags).toBe("FAIR FINAL ");
+      const warnings = payload.warnings as string[];
+      expect(warnings).toHaveLength(2);
+      expect(warnings.some((warning) => warning.includes("FINAL"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("FAIR"))).toBe(true);
+    });
+
+    it("create_assignment warns when the assessment name is missing the ASMT suffix", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 711, name: "Watershed Test", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed Test",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const warnings = parseJsonResult(result).warnings as string[];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/does not end with "ASMT"/);
+    });
+
+    it("create_assignment warns when fair_asmt is false but the name contains FAIR", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 712, name: "Unit 1 FAIR ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Unit 1 FAIR ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const warnings = parseJsonResult(result).warnings as string[];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/fair_asmt is false/);
+      expect(warnings[0]).toContain("FAIR");
+    });
+
+    it("create_assignment with a correctly tagged FINAL-only title has no warnings and suggests 'FINAL '", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 713, name: "Quiz: Watershed [Week 12] 10% FINAL ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Quiz: Watershed [Week 12] 10% FINAL ASMT",
+        template: "assessment",
+        final_asmt: true,
+        fair_asmt: false,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title_flags).toBe("FINAL ");
+      expect(payload).not.toHaveProperty("warnings");
+    });
+
+    it("update_assignment re-applying template='assessment' without flags fails closed with zero Canvas calls", async () => {
+      const { client, requests } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        template: "assessment",
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("final_asmt");
+      expect(result.content?.[0]?.text).toContain("fair_asmt");
+      expect(requests).toHaveLength(0);
+    });
+
+    it("update_assignment checks the existing name against the flags on update-without-rename", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 555, name: "Project: Watershed [Week 3] 20% ASMT", published: false } },
+        { status: 200, data: { id: 555, name: "Project: Watershed [Week 3] 20% ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        template: "assessment",
+        final_asmt: true,
+        fair_asmt: false,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title_flags).toBe("FINAL ");
+      const warnings = payload.warnings as string[];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/final_asmt is true/);
+    });
+
+    it("non-assessment templates are unaffected by absent flags", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 714, name: "Essay 2", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Essay 2",
+        description: "<p>Write.</p>",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(parseJsonResult(result)).not.toHaveProperty("suggested_title_flags");
+      expect(parseJsonResult(result)).not.toHaveProperty("warnings");
     });
   });
 
