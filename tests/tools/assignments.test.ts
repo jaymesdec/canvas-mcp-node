@@ -23,14 +23,16 @@ afterEach(async () => {
 });
 
 describe("registerAssignmentTools", () => {
-  it("registers all three assignment tools", () => {
+  it("registers all five assignment tools", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerAssignmentTools(harness.server as never, client, anonymizer);
     expect([...harness.tools.keys()].sort()).toEqual([
+      "create_assignment",
       "get_assignment_details",
       "get_assignment_rubric_details",
       "list_assignments",
+      "update_assignment",
     ]);
   });
 
@@ -239,6 +241,138 @@ describe("registerAssignmentTools", () => {
       if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
       else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
     }
+  });
+
+  it("create_assignment POSTs published:false plus only the provided fields", async () => {
+    const { client, requests } = buildMockCanvas([
+      {
+        status: 200,
+        data: {
+          id: 555,
+          name: "New Project",
+          due_at: "2026-09-01T23:59:00Z",
+          points_possible: 20,
+          published: false,
+          workflow_state: "unpublished",
+        },
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("create_assignment", {
+      course_identifier: 60366,
+      name: "New Project",
+      due_at: "2026-09-01T23:59:00Z",
+      points_possible: 20,
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.method).toBe("POST");
+    expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments");
+    expect(requests[0]?.data).toEqual({
+      assignment: {
+        name: "New Project",
+        due_at: "2026-09-01T23:59:00Z",
+        points_possible: 20,
+        published: false,
+      },
+    });
+    const payload = parseJsonResult(result);
+    expect((payload.assignment as Record<string, unknown>).id).toBe(555);
+    expect(result.content?.[0]?.text).toContain("draft");
+    expect(result.content?.[0]?.text).toContain("unpublished");
+  });
+
+  it("create_assignment surfaces a Canvas 403 via errorResult with tool context", async () => {
+    const { client } = buildMockCanvas([
+      { status: 403, data: { errors: [{ message: "unauthorized" }] } },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("create_assignment", {
+      course_identifier: 60366,
+      name: "Forbidden",
+    })) as ToolResponse;
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("create_assignment");
+    expect(result.content?.[0]?.text).toContain("403");
+  });
+
+  it("update_assignment PUTs a partial payload and never sends published", async () => {
+    const { client, requests } = buildMockCanvas([
+      {
+        status: 200,
+        data: { id: 555, name: "Renamed", published: true, workflow_state: "published" },
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("update_assignment", {
+      course_identifier: 60366,
+      assignment_id: 555,
+      name: "Renamed",
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.method).toBe("PUT");
+    expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments/555");
+    expect(requests[0]?.data).toEqual({ assignment: { name: "Renamed" } });
+  });
+
+  it("update_assignment with zero updatable fields errors without any HTTP call", async () => {
+    const { client, requests } = buildMockCanvas([]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("update_assignment", {
+      course_identifier: 60366,
+      assignment_id: 555,
+    })) as ToolResponse;
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toMatch(/provide at least one field/);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("update_assignment warns when Canvas silently ignores a submission_types change", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: { id: 555, name: "HW1", submission_types: ["online_text_entry"] },
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("update_assignment", {
+      course_identifier: 60366,
+      assignment_id: 555,
+      submission_types: ["online_upload"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    const warnings = parseJsonResult(result).warnings as string[];
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/submission_types/);
+    expect(warnings[0]).toMatch(/student submissions/);
+  });
+
+  it("update_assignment with a matching submission_types echo has no warnings key", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: { id: 555, name: "HW1", submission_types: ["online_upload", "online_url"] },
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("update_assignment", {
+      course_identifier: 60366,
+      assignment_id: 555,
+      submission_types: ["online_url", "online_upload"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(parseJsonResult(result)).not.toHaveProperty("warnings");
   });
 
   it("get_assignment_details returns the raw assignment", async () => {

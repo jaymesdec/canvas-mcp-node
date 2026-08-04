@@ -33,6 +33,33 @@ const LIST_ASSIGNMENTS_INPUT = {
     ),
 };
 
+const SUBMISSION_TYPES_DESCRIPTION =
+  "Allowed Canvas values: online_upload, online_text_entry, online_url, online_quiz, media_recording, " +
+  "student_annotation, on_paper, external_tool, discussion_topic, wiki_page, none, not_graded.";
+
+const CREATE_ASSIGNMENT_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  name: z.string(),
+  description: z.string().optional().describe("Assignment description HTML."),
+  due_at: z.string().optional().describe("ISO-8601 due timestamp."),
+  unlock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment unlocks for students."),
+  lock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment locks."),
+  points_possible: z.number().optional(),
+  submission_types: z.array(z.string()).optional().describe(SUBMISSION_TYPES_DESCRIPTION),
+};
+
+const UPDATE_ASSIGNMENT_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  assignment_id: z.union([z.string(), z.number()]),
+  name: z.string().optional(),
+  description: z.string().optional().describe("Assignment description HTML."),
+  due_at: z.string().optional().describe("ISO-8601 due timestamp."),
+  unlock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment unlocks for students."),
+  lock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment locks."),
+  points_possible: z.number().optional(),
+  submission_types: z.array(z.string()).optional().describe(SUBMISSION_TYPES_DESCRIPTION),
+};
+
 const GET_ASSIGNMENT_DETAILS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   assignment_id: z.union([z.string(), z.number()]),
@@ -98,6 +125,12 @@ function displayAssignment(
 
 function isPublished(assignment: CanvasAssignment): boolean {
   return assignment.published === true || assignment.workflow_state === "published";
+}
+
+function submissionTypesMatch(requested: string[], returned: unknown): boolean {
+  if (!Array.isArray(returned) || returned.length !== requested.length) return false;
+  const returnedSet = new Set(returned);
+  return requested.every((type) => returnedSet.has(type));
 }
 
 export function registerAssignmentTools(
@@ -180,6 +213,103 @@ export function registerAssignmentTools(
             summary:
               `Course ${courseId}: ${trimmedAssignments.length} assignment(s).` +
               (overridden && hasSubmissionInclude ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "create_assignment",
+    {
+      description:
+        "Create a new Canvas assignment as a draft (published is forced false per the cross-project never-auto-publish rule — teacher publishes after review). Bypasses the course-code cache so a rename mid-session can't misroute the write. " +
+        SUBMISSION_TYPES_DESCRIPTION,
+      inputSchema: CREATE_ASSIGNMENT_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof CREATE_ASSIGNMENT_INPUT>>;
+      return safeHandler("create_assignment", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+
+        const assignmentPayload: Record<string, unknown> = { name: args.name, published: false };
+        if (args.description !== undefined) assignmentPayload.description = args.description;
+        if (args.due_at !== undefined) assignmentPayload.due_at = args.due_at;
+        if (args.unlock_at !== undefined) assignmentPayload.unlock_at = args.unlock_at;
+        if (args.lock_at !== undefined) assignmentPayload.lock_at = args.lock_at;
+        if (args.points_possible !== undefined) assignmentPayload.points_possible = args.points_possible;
+        if (args.submission_types !== undefined) assignmentPayload.submission_types = args.submission_types;
+
+        const created = await canvas.post<CanvasAssignment>(
+          `/api/v1/courses/${courseId}/assignments`,
+          { assignment: assignmentPayload },
+        );
+
+        return jsonResult(
+          {
+            course_id: courseId,
+            assignment: displayAssignment(created, { includeDescription: false }),
+          },
+          {
+            summary: `Created draft assignment "${created.name ?? args.name}" (id ${created.id}) in course ${courseId}. Assignment is unpublished — teacher publishes manually after review.`,
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "update_assignment",
+    {
+      description:
+        "Update fields on an existing Canvas assignment. Sends only the provided fields and never touches the published state. " +
+        "Caveat: Canvas silently ignores submission_types changes once an assignment has student submissions — the response is checked and a warning is returned when that happens. " +
+        SUBMISSION_TYPES_DESCRIPTION,
+      inputSchema: UPDATE_ASSIGNMENT_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof UPDATE_ASSIGNMENT_INPUT>>;
+      return safeHandler("update_assignment", async () => {
+        const assignmentPayload: Record<string, unknown> = {};
+        if (args.name !== undefined) assignmentPayload.name = args.name;
+        if (args.description !== undefined) assignmentPayload.description = args.description;
+        if (args.due_at !== undefined) assignmentPayload.due_at = args.due_at;
+        if (args.unlock_at !== undefined) assignmentPayload.unlock_at = args.unlock_at;
+        if (args.lock_at !== undefined) assignmentPayload.lock_at = args.lock_at;
+        if (args.points_possible !== undefined) assignmentPayload.points_possible = args.points_possible;
+        if (args.submission_types !== undefined) assignmentPayload.submission_types = args.submission_types;
+        if (Object.keys(assignmentPayload).length === 0) {
+          throw new Error(
+            "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types).",
+          );
+        }
+
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const updated = await canvas.put<CanvasAssignment>(
+          `/api/v1/courses/${courseId}/assignments/${args.assignment_id}`,
+          { assignment: assignmentPayload },
+        );
+
+        const warnings: string[] = [];
+        if (
+          args.submission_types !== undefined &&
+          !submissionTypesMatch(args.submission_types, updated.submission_types)
+        ) {
+          warnings.push(
+            `Canvas ignored the requested submission_types change (requested: [${args.submission_types.join(", ")}], returned: [${(updated.submission_types ?? []).join(", ")}]). Canvas silently rejects submission_types edits once an assignment has student submissions.`,
+          );
+        }
+
+        return jsonResult(
+          {
+            course_id: courseId,
+            assignment: displayAssignment(updated, { includeDescription: args.description !== undefined }),
+            ...(warnings.length > 0 ? { warnings } : {}),
+          },
+          {
+            summary:
+              `Updated assignment ${args.assignment_id} ("${updated.name ?? ""}") in course ${courseId}.` +
+              (warnings.length > 0 ? " [warning: submission_types change ignored by Canvas]" : ""),
           },
         );
       });
