@@ -75,6 +75,12 @@ export function pickFields<T extends Record<string, unknown>>(
   return projected;
 }
 
+/** Derive https://<host>/courses/<id> from the API base URL + course id. */
+export function deriveCourseUrl(baseUrl: string, courseId: number): string {
+  const base = baseUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${base}/courses/${courseId}`;
+}
+
 /** Map of common include[] params into Canvas's repeated-key array format. */
 export function buildIncludeParams(include: string[] | undefined): Record<string, unknown> {
   if (!include || include.length === 0) return {};

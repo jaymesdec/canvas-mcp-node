@@ -6,6 +6,28 @@ import * as path from "node:path";
 import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerAssignmentTools } from "../../src/tools/assignments.js";
 import { Anonymizer } from "../../src/anonymizer.js";
+import type { SchoolConfig } from "../../src/schoolConfig.js";
+
+const templatedConfig: SchoolConfig = {
+  schoolName: "Test School",
+  pageTemplates: {
+    default: {
+      description: "Generic header wrap",
+      html: "<div class=\"wrap\"><h1>{{title}}</h1>{{body}}</div>",
+    },
+    assessment: {
+      description: "Assessment layout with named slots",
+      html:
+        "<article class=\"assessment\"><h2>{{title}}</h2>" +
+        "<section class=\"req\">{{slot:requirements}}</section>" +
+        "<section class=\"grading\">{{slot:grading}}</section></article>",
+      slots: {
+        requirements: { description: "What students must do" },
+        grading: { description: "How it's graded" },
+      },
+    },
+  },
+};
 
 async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "canvas-anon-assign-"));
@@ -365,6 +387,177 @@ describe("registerAssignmentTools", () => {
     expect((payload.assignment as Record<string, unknown>).id).toBe(555);
     expect(result.content?.[0]?.text).toContain("draft");
     expect(result.content?.[0]?.text).toContain("unpublished");
+  });
+
+  describe("description templates", () => {
+    it("create_assignment wraps the description in the 'default' template when a school config is loaded", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 700, name: "Essay 1", published: false, workflow_state: "unpublished" } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Essay 1",
+        description: "<p>Write an essay.</p>",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
+      expect(payload.description).toBe('<div class="wrap"><h1>Essay 1</h1><p>Write an essay.</p></div>');
+      expect(parseJsonResult(result).template_applied).toBe("default");
+    });
+
+    it("create_assignment with template='assessment' substitutes slot content", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 701, name: "Watershed ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        slots: {
+          requirements: "<p>20 multiple-choice questions.</p>",
+          grading: "<p>1 point each.</p>",
+        },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
+      expect(payload.description).toContain("<h2>Watershed ASMT</h2>");
+      expect(payload.description).toContain('<section class="req"><p>20 multiple-choice questions.</p></section>');
+      expect(payload.description).toContain('<section class="grading"><p>1 point each.</p></section>');
+      expect(payload.description).not.toContain("{{slot:");
+      expect(parseJsonResult(result).template_applied).toBe("assessment");
+    });
+
+    it("create_assignment with template='none' sends the description verbatim", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 702, name: "Raw", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Raw",
+        description: "<p>Untouched</p>",
+        template: "none",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
+      expect(payload.description).toBe("<p>Untouched</p>");
+      expect(parseJsonResult(result).template_applied).toBeNull();
+    });
+
+    it("create_assignment with neither description nor slots skips templating entirely (no chrome-only descriptions)", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 703, name: "No Description", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "No Description",
+        points_possible: 5,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = (requests[0]?.data as { assignment: Record<string, unknown> }).assignment;
+      expect(payload).not.toHaveProperty("description");
+      expect(parseJsonResult(result)).not.toHaveProperty("template_applied");
+    });
+
+    it("create_assignment sends the description verbatim when no school config is loaded (generic mode)", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 704, name: "Plain", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, null);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Plain",
+        description: "<p>Plain description</p>",
+      })) as ToolResponse;
+      const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
+      expect(payload.description).toBe("<p>Plain description</p>");
+      expect(parseJsonResult(result).template_applied).toBeNull();
+    });
+
+    it("update_assignment stays in simple mode (verbatim description) when no template args are passed", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 555, name: "HW1", description: "<p>raw update</p>" } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        description: "<p>raw update</p>",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("PUT");
+      expect(requests[0]?.data).toEqual({ assignment: { description: "<p>raw update</p>" } });
+      expect(parseJsonResult(result)).not.toHaveProperty("template_applied");
+    });
+
+    it("update_assignment with template+slots rebuilds the description (name provided, no extra GET)", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 555, name: "Watershed ASMT v2", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        name: "Watershed ASMT v2",
+        template: "assessment",
+        slots: {
+          requirements: "<p>Updated requirements.</p>",
+          grading: "<p>Updated grading.</p>",
+        },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.method).toBe("PUT");
+      const payload = (requests[0]?.data as { assignment: { name: string; description: string } }).assignment;
+      expect(payload.name).toBe("Watershed ASMT v2");
+      expect(payload.description).toContain("<h2>Watershed ASMT v2</h2>");
+      expect(payload.description).toContain("<p>Updated requirements.</p>");
+      expect(payload.description).toContain("<p>Updated grading.</p>");
+      expect(parseJsonResult(result).template_applied).toBe("assessment");
+    });
+
+    it("update_assignment fetches the existing name for {{title}} when name is not being updated", async () => {
+      const { client, requests } = buildMockCanvas([
+        // GET assignment to resolve the name for the {{title}} token
+        { status: 200, data: { id: 555, name: "Existing ASMT Name", published: false } },
+        // PUT response
+        { status: 200, data: { id: 555, name: "Existing ASMT Name", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        template: "assessment",
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("GET");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments/555");
+      const putRequest = requests.at(-1);
+      expect(putRequest?.method).toBe("PUT");
+      const payload = (putRequest?.data as { assignment: Record<string, unknown> }).assignment;
+      // Name was fetched only to fill {{title}} — the Canvas name field is not updated.
+      expect(payload).not.toHaveProperty("name");
+      expect(payload.description).toContain("<h2>Existing ASMT Name</h2>");
+    });
   });
 
   it("create_assignment surfaces a Canvas 403 via errorResult with tool context", async () => {

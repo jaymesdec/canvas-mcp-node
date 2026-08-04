@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
-import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
+import { applyPageTemplate, type SchoolConfig } from "../schoolConfig.js";
+import { deriveCourseUrl, jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
 import { anonymizeNonStaffCommentAuthors, displaySubmission } from "./submissions.js";
 import { buildStaffIdSet } from "./roster.js";
@@ -41,24 +42,82 @@ const SUBMISSION_TYPES_DESCRIPTION =
 const CREATE_ASSIGNMENT_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   name: z.string(),
-  description: z.string().optional().describe("Assignment description HTML."),
+  description: z
+    .string()
+    .optional()
+    .describe(
+      "Assignment description HTML used for single-slot templates (filled into the {{body}} token). For multi-slot templates like 'assessment', pass `slots` instead.",
+    ),
   due_at: z.string().optional().describe("ISO-8601 due timestamp."),
   unlock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment unlocks for students."),
   lock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment locks."),
   points_possible: z.number().optional(),
   submission_types: z.array(z.string()).optional().describe(SUBMISSION_TYPES_DESCRIPTION),
+  template: z
+    .string()
+    .optional()
+    .describe(
+      "Named page template from the school config (e.g., 'assessment', 'default'). Omit to apply 'default' to the description. Pass 'none' to skip wrapping. Use list_page_templates to discover what's available.",
+    ),
+  slots: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Named content for multi-slot templates. Keys map to {{slot:NAME}} tokens in the template HTML. Discover slot names via list_page_templates.",
+    ),
+  include_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Force-add optional template sections that are default-omit. Discover section names via list_page_templates.",
+    ),
+  omit_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Force-remove template sections that are default-include. Discover section names via list_page_templates.",
+    ),
 };
 
 const UPDATE_ASSIGNMENT_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   assignment_id: z.union([z.string(), z.number()]),
   name: z.string().optional(),
-  description: z.string().optional().describe("Assignment description HTML."),
+  description: z
+    .string()
+    .optional()
+    .describe(
+      "Assignment description HTML. For multi-slot templates, pass `slots` instead. Sent verbatim only when no template machinery is engaged.",
+    ),
   due_at: z.string().optional().describe("ISO-8601 due timestamp."),
   unlock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment unlocks for students."),
   lock_at: z.string().optional().describe("ISO-8601 timestamp when the assignment locks."),
   points_possible: z.number().optional(),
   submission_types: z.array(z.string()).optional().describe(SUBMISSION_TYPES_DESCRIPTION),
+  template: z
+    .string()
+    .optional()
+    .describe(
+      "Named page template from the school config (e.g., 'assessment'). Pass to rebuild the description from the template with the supplied slots. Pass 'none' to skip template machinery entirely (description sent verbatim). When omitted with no other template args, behaves as a simple field-update.",
+    ),
+  slots: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Named content for multi-slot templates. When provided (or when `template` / `include_sections` / `omit_sections` is provided), the description is REBUILT from the template using these slots — pass ALL slots you want in the new description, not just the ones that changed. Use get_assignment_details first if you need the current values.",
+    ),
+  include_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "When re-applying a template, force-add optional sections that are default-omit.",
+    ),
+  omit_sections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "When re-applying a template, force-remove sections that are default-include.",
+    ),
 };
 
 const GET_ASSIGNMENT_DETAILS_INPUT = {
@@ -134,10 +193,35 @@ function submissionTypesMatch(requested: string[], returned: unknown): boolean {
   return requested.every((type) => returnedSet.has(type));
 }
 
+interface CanvasCourseLite {
+  id: number;
+  name?: string;
+}
+
+// Fetch course.name only when the chosen template actually needs it — saves an
+// API call per write when the template doesn't use {{course_name}}.
+async function fetchCourseNameIfTemplateNeedsIt(
+  canvas: CanvasClient,
+  schoolConfig: SchoolConfig | null,
+  templateArg: string | undefined,
+  courseId: number,
+): Promise<string | undefined> {
+  const chosenTemplate = schoolConfig?.pageTemplates?.[templateArg ?? "default"];
+  if (!chosenTemplate?.html.includes("{{course_name}}")) return undefined;
+  try {
+    const course = await canvas.get<CanvasCourseLite>(`/api/v1/courses/${courseId}`);
+    return course.name;
+  } catch {
+    // ignore — {{course_name}} substitutes as empty
+    return undefined;
+  }
+}
+
 export function registerAssignmentTools(
   server: McpServer,
   canvas: CanvasClient,
   anonymizer: Anonymizer,
+  schoolConfig: SchoolConfig | null = null,
 ): void {
   server.registerTool(
     "list_assignments",
@@ -266,6 +350,8 @@ export function registerAssignmentTools(
     {
       description:
         "Create a new Canvas assignment as a draft (published is forced false per the cross-project never-auto-publish rule — teacher publishes after review). Bypasses the course-code cache so a rename mid-session can't misroute the write. " +
+        "The description is wrapped in the school's 'default' page template automatically; pass template='assessment' for Franklin assessments — discover slot names and the ASMT title format via list_page_templates — or template='none' to skip wrapping. " +
+        "Multi-slot templates need content via slots={...}; include_sections / omit_sections override the template's default optional-section state per-call. " +
         SUBMISSION_TYPES_DESCRIPTION,
       inputSchema: CREATE_ASSIGNMENT_INPUT,
     },
@@ -275,7 +361,31 @@ export function registerAssignmentTools(
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
         const assignmentPayload: Record<string, unknown> = { name: args.name, published: false };
-        if (args.description !== undefined) assignmentPayload.description = args.description;
+        // Assignments legitimately exist without descriptions — only engage the
+        // template machinery when the caller supplied content, so we never
+        // create chrome-only descriptions.
+        const hasDescriptionContent = args.description !== undefined || args.slots !== undefined;
+        let templateApplication: ReturnType<typeof applyPageTemplate> | null = null;
+        if (hasDescriptionContent) {
+          const courseName = await fetchCourseNameIfTemplateNeedsIt(canvas, schoolConfig, args.template, courseId);
+          templateApplication = applyPageTemplate(
+            schoolConfig,
+            {
+              title: args.name,
+              body: args.description,
+              slots: args.slots,
+              courseName,
+              courseId,
+              courseUrl: deriveCourseUrl(canvas.baseUrl, courseId),
+            },
+            args.template,
+            {
+              includeSections: args.include_sections,
+              omitSections: args.omit_sections,
+            },
+          );
+          assignmentPayload.description = templateApplication.body;
+        }
         if (args.due_at !== undefined) assignmentPayload.due_at = args.due_at;
         if (args.unlock_at !== undefined) assignmentPayload.unlock_at = args.unlock_at;
         if (args.lock_at !== undefined) assignmentPayload.lock_at = args.lock_at;
@@ -287,15 +397,25 @@ export function registerAssignmentTools(
           { assignment: assignmentPayload },
         );
 
-        return jsonResult(
-          {
-            course_id: courseId,
-            assignment: displayAssignment(created, { includeDescription: false }),
-          },
-          {
-            summary: `Created draft assignment "${created.name ?? args.name}" (id ${created.id}) in course ${courseId}. Assignment is unpublished — teacher publishes manually after review.`,
-          },
-        );
+        const responsePayload: Record<string, unknown> = {
+          course_id: courseId,
+          assignment: displayAssignment(created, { includeDescription: false }),
+        };
+        if (templateApplication) {
+          responsePayload.template_applied = templateApplication.appliedTemplate;
+          if (templateApplication.includedSections.length > 0)
+            responsePayload.included_sections = templateApplication.includedSections;
+          if (templateApplication.omittedSections.length > 0)
+            responsePayload.omitted_sections = templateApplication.omittedSections;
+          if (templateApplication.warnings.length > 0) responsePayload.warnings = templateApplication.warnings;
+        }
+
+        return jsonResult(responsePayload, {
+          summary:
+            `Created draft assignment "${created.name ?? args.name}" (id ${created.id}) in course ${courseId}.` +
+            (templateApplication?.appliedTemplate ? ` Template: ${templateApplication.appliedTemplate}.` : "") +
+            " Assignment is unpublished — teacher publishes manually after review.",
+        });
       });
     },
   );
@@ -305,6 +425,9 @@ export function registerAssignmentTools(
     {
       description:
         "Update fields on an existing Canvas assignment. Sends only the provided fields and never touches the published state. " +
+        "Two modes: (1) Simple field update — provided fields (description included) are sent verbatim. " +
+        "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the description from the school template (same machinery as create_assignment; pass template='assessment' for Franklin assessments — discover slot names via list_page_templates). " +
+        "When re-applying a template, pass ALL slots you want in the result, not just the ones that changed — the description is rebuilt from scratch. Pass template='none' to force simple mode. " +
         "Caveat: Canvas silently ignores submission_types changes once an assignment has student submissions — the response is checked and a warning is returned when that happens. " +
         SUBMISSION_TYPES_DESCRIPTION,
       inputSchema: UPDATE_ASSIGNMENT_INPUT,
@@ -320,40 +443,93 @@ export function registerAssignmentTools(
         if (args.lock_at !== undefined) assignmentPayload.lock_at = args.lock_at;
         if (args.points_possible !== undefined) assignmentPayload.points_possible = args.points_possible;
         if (args.submission_types !== undefined) assignmentPayload.submission_types = args.submission_types;
-        if (Object.keys(assignmentPayload).length === 0) {
+
+        const hasTemplateArgs =
+          args.template !== undefined ||
+          args.slots !== undefined ||
+          args.include_sections !== undefined ||
+          args.omit_sections !== undefined;
+        const usingTemplate = hasTemplateArgs && args.template !== "none";
+
+        if (Object.keys(assignmentPayload).length === 0 && !usingTemplate) {
           throw new Error(
-            "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types).",
+            "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types) or template args (template/slots/include_sections/omit_sections).",
           );
         }
 
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+
+        let templateApplication: ReturnType<typeof applyPageTemplate> | null = null;
+        if (usingTemplate) {
+          // Need the name to fill {{title}}; fetch existing if not being updated
+          let resolvedName = args.name;
+          if (resolvedName === undefined) {
+            const current = await canvas.get<CanvasAssignment>(
+              `/api/v1/courses/${courseId}/assignments/${args.assignment_id}`,
+            );
+            resolvedName = current.name ?? "";
+          }
+
+          const courseName = await fetchCourseNameIfTemplateNeedsIt(canvas, schoolConfig, args.template, courseId);
+          templateApplication = applyPageTemplate(
+            schoolConfig,
+            {
+              title: resolvedName,
+              body: args.description,
+              slots: args.slots,
+              courseName,
+              courseId,
+              courseUrl: deriveCourseUrl(canvas.baseUrl, courseId),
+            },
+            args.template,
+            {
+              includeSections: args.include_sections,
+              omitSections: args.omit_sections,
+            },
+          );
+          assignmentPayload.description = templateApplication.body;
+        }
+
         const updated = await canvas.put<CanvasAssignment>(
           `/api/v1/courses/${courseId}/assignments/${args.assignment_id}`,
           { assignment: assignmentPayload },
         );
 
-        const warnings: string[] = [];
+        const warnings: string[] = [...(templateApplication?.warnings ?? [])];
+        let submissionTypesIgnored = false;
         if (
           args.submission_types !== undefined &&
           !submissionTypesMatch(args.submission_types, updated.submission_types)
         ) {
+          submissionTypesIgnored = true;
           warnings.push(
             `Canvas ignored the requested submission_types change (requested: [${args.submission_types.join(", ")}], returned: [${(updated.submission_types ?? []).join(", ")}]). Canvas silently rejects submission_types edits once an assignment has student submissions.`,
           );
         }
 
-        return jsonResult(
-          {
-            course_id: courseId,
-            assignment: displayAssignment(updated, { includeDescription: args.description !== undefined }),
-            ...(warnings.length > 0 ? { warnings } : {}),
-          },
-          {
-            summary:
-              `Updated assignment ${args.assignment_id} ("${updated.name ?? ""}") in course ${courseId}.` +
-              (warnings.length > 0 ? " [warning: submission_types change ignored by Canvas]" : ""),
-          },
-        );
+        const responsePayload: Record<string, unknown> = {
+          course_id: courseId,
+          // Templated descriptions are not echoed back — same token-saving rule
+          // as create_page's body_omitted.
+          assignment: displayAssignment(updated, {
+            includeDescription: args.description !== undefined && !templateApplication,
+          }),
+        };
+        if (templateApplication) {
+          responsePayload.template_applied = templateApplication.appliedTemplate;
+          if (templateApplication.includedSections.length > 0)
+            responsePayload.included_sections = templateApplication.includedSections;
+          if (templateApplication.omittedSections.length > 0)
+            responsePayload.omitted_sections = templateApplication.omittedSections;
+        }
+        if (warnings.length > 0) responsePayload.warnings = warnings;
+
+        return jsonResult(responsePayload, {
+          summary:
+            `Updated assignment ${args.assignment_id} ("${updated.name ?? ""}") in course ${courseId}.` +
+            (templateApplication?.appliedTemplate ? ` Template: ${templateApplication.appliedTemplate}.` : "") +
+            (submissionTypesIgnored ? " [warning: submission_types change ignored by Canvas]" : ""),
+        });
       });
     },
   );

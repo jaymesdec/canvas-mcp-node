@@ -312,3 +312,10 @@ Deliberately excluded: **`delete_assignment` and `delete_quiz` do not exist** �
 - **`execute_typescript` returns human-readable text only.** The structured result object was removed — parse the printed stdout/stderr text; don't expect a JSON payload block.
 - **Course-code ambiguity errors instead of guessing.** A non-numeric `course_identifier` resolves only on a unique exact match (code first, then name). Multiple exact matches return an error listing the candidate courses with numeric ids — the model self-corrects by passing the id. Skills that relied on fuzzy near-miss resolution should switch to exact codes or numeric ids.
 - **`structuredContent` removed.** Tool results are now a single compact-JSON text block plus a one-line summary — payloads are no longer duplicated. No skill in the current audit reads `structuredContent`, so no changes are expected; if one asserts on it, parse the text block's JSON instead.
+
+---
+
+## v0.4.1 — assignment descriptions template-wrapped by default
+
+- **`create_assignment` / `update_assignment` now wrap descriptions in the school's page templates** — the same `template` / `slots` / `include_sections` / `omit_sections` machinery as `create_page` / `edit_page_content`. When a school config is loaded, a provided `description` is wrapped in the `default` template automatically; pass `template: 'assessment'` (discover slot names + the ASMT title format via `list_page_templates`) for Franklin assessments, or `template: 'none'` to opt out and send the description verbatim. Calls with neither `description` nor `slots` skip templating entirely — no chrome-only descriptions. `update_assignment` mirrors `edit_page_content`'s two modes: simple field update (description verbatim) vs. rebuild-from-template when any template arg is passed (pass ALL slots you want in the result). Responses carry `template_applied` / `included_sections` / `omitted_sections` / `warnings` like `create_page`.
+- **Quiz descriptions stay verbatim by design** — quiz intros render above the questions, not as wiki pages, so `create_quiz` / `update_quiz` do no page-template wrapping (their tool descriptions now say so).

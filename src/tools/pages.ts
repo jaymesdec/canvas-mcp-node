@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import { applyPageTemplate, type SchoolConfig } from "../schoolConfig.js";
-import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { deriveCourseUrl, jsonResult, safeHandler } from "./toolHelpers.js";
 
 const LIST_PAGES_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -113,12 +113,6 @@ function trimResponseBody(page: CanvasPageLite): Omit<CanvasPageLite, "body"> & 
   return { ...rest, body_omitted: true };
 }
 
-/** Derive https://<host>/courses/<id> from CANVAS_API_URL + course id. */
-function deriveCourseUrl(canvas: CanvasClient, courseId: number): string {
-  const base = canvas.baseUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-  return `${base}/courses/${courseId}`;
-}
-
 export function registerPageTools(
   server: McpServer,
   canvas: CanvasClient,
@@ -221,7 +215,7 @@ export function registerPageTools(
             slots: args.slots,
             courseName,
             courseId,
-            courseUrl: deriveCourseUrl(canvas, courseId),
+            courseUrl: deriveCourseUrl(canvas.baseUrl, courseId),
           },
           args.template,
           {
@@ -335,7 +329,7 @@ export function registerPageTools(
               slots: args.slots,
               courseName,
               courseId,
-              courseUrl: deriveCourseUrl(canvas, courseId),
+              courseUrl: deriveCourseUrl(canvas.baseUrl, courseId),
             },
             args.template,
             {

@@ -25,7 +25,7 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.4.0";
+const SERVER_VERSION = "0.4.1";
 
 /**
  * Where the .mcpb-bundled franklin.json lives relative to the compiled
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   registerModuleTools(server, canvas);
   registerPageTools(server, canvas, schoolConfig);
   registerQuizTools(server, canvas);
-  registerAssignmentTools(server, canvas, anonymizer);
+  registerAssignmentTools(server, canvas, anonymizer, schoolConfig);
   registerRubricTools(server, canvas);
   registerUserTools(server, canvas, anonymizer);
   registerSubmissionTools(server, canvas, anonymizer);

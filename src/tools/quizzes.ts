@@ -169,7 +169,8 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
     "create_quiz",
     {
       description:
-        "Create a Canvas quiz. published is forced false per Franklin School cross-project rule — teacher publishes after review.",
+        "Create a Canvas quiz. published is forced false per Franklin School cross-project rule — teacher publishes after review. " +
+        "Quiz description is sent verbatim (no page-template wrapping — quiz intros render above the questions, not as wiki pages).",
       inputSchema: CREATE_QUIZ_INPUT,
     },
     async (input) => {
@@ -286,7 +287,8 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
     "update_quiz",
     {
       description:
-        "Update settings on an existing Canvas quiz (title, description, quiz_type, due_at, points_possible, shuffle_answers, allowed_attempts). Never touches published state — quizzes with student submissions cannot be unpublished, and question edits on such quizzes create a new quiz version.",
+        "Update settings on an existing Canvas quiz (title, description, quiz_type, due_at, points_possible, shuffle_answers, allowed_attempts). Never touches published state — quizzes with student submissions cannot be unpublished, and question edits on such quizzes create a new quiz version. " +
+        "Quiz description is sent verbatim (no page-template wrapping — quiz intros render above the questions, not as wiki pages).",
       inputSchema: UPDATE_QUIZ_INPUT,
     },
     async (input) => {
