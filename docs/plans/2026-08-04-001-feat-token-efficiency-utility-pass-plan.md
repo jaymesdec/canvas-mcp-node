@@ -1,7 +1,7 @@
 ---
 title: "feat: Token-efficiency + utility pass (pre-distribution)"
 type: feat
-status: active
+status: completed
 date: 2026-08-04
 origin: docs/brainstorms/2026-08-04-token-efficiency-and-utility-requirements.md
 deepened: 2026-08-04
@@ -121,7 +121,7 @@ From origin (all must be satisfied):
 
 Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are written against the parsed-text idiom (the `parseJsonResult` helper below), never `structuredContent`.
 
-- [ ] **Unit 1: Compact single-representation `jsonResult`**
+- [x] **Unit 1: Compact single-representation `jsonResult`**
 
 **Goal:** Every tool result carries the payload exactly once, compact.
 
@@ -146,7 +146,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** `npm test` green; no `structuredContent` remains in `src/` outputs or test assertions (grep clean, `code_api/` excluded).
 
-- [ ] **Unit 2: Exact-match course resolution + bulk-grade single resolution**
+- [x] **Unit 2: Exact-match course resolution + bulk-grade single resolution**
 
 **Goal:** No write (or read) can silently land on a guessed course; bulk grading stops making N resolution calls.
 
@@ -172,7 +172,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** grading tests assert one resolution call per bulk run; ambiguous-code test proves no write is attempted; no write path resolves through the cache.
 
-- [ ] **Unit 3: Response trimming audit (anonymize-first)**
+- [x] **Unit 3: Response trimming audit (anonymize-first)**
 
 **Goal:** What reaches the model is an explicit field mapping everywhere; FERPA output is trimmed after anonymization.
 
@@ -204,7 +204,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** serialized `list_submissions` fixture output shrinks materially vs. current (assert absence of `avatar_url`/`preview_url`/`media_comment` keys); all FERPA tests green.
 
-- [ ] **Unit 4: Assignment tools**
+- [x] **Unit 4: Assignment tools**
 
 **Goal:** Teachers can create and fix assignments.
 
@@ -229,7 +229,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** created assignment summary says "draft"; no code path can send `published: true`.
 
-- [ ] **Unit 5: Quiz inspect/fix tools**
+- [x] **Unit 5: Quiz inspect/fix tools**
 
 **Goal:** The quiz loop closes, including question-level fixes.
 
@@ -254,7 +254,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** create → get → update-question → get round-trip in mocked harness shows the edit.
 
-- [ ] **Unit 6: Module fix tools**
+- [x] **Unit 6: Module fix tools**
 
 **Goal:** Module-building mistakes recoverable in-session, including whole-module deletion.
 
@@ -278,7 +278,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** all three registered, README rows present (Unit 10), tests green.
 
-- [ ] **Unit 7: Discussion-entry anonymization plumbing**
+- [x] **Unit 7: Discussion-entry anonymization plumbing**
 
 **Goal:** Entry authors are classified without embedded role data; bodies get best-effort scrubbing — before any discussion tool ships.
 
@@ -310,7 +310,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** R3a-style regression — raw student names never appear anywhere in a serialized anonymized entry set.
 
-- [ ] **Unit 8: Discussion tools**
+- [x] **Unit 8: Discussion tools**
 
 **Goal:** Discussions readable, creatable (draft), and fixable.
 
@@ -337,7 +337,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** no code path publishes a discussion; FERPA tests cover gate, override, and denial.
 
-- [ ] **Unit 9: Announcement tools**
+- [x] **Unit 9: Announcement tools**
 
 **Goal:** Announcements listable and schedulable with a teacher-confirmed future post time — never immediately visible.
 
@@ -362,7 +362,7 @@ Sequencing note: **Unit 1 lands first.** Every subsequent unit's tests are writt
 
 **Verification:** no test path can create an immediately-visible announcement; the fail-closed branches (missing/past/near/offset-less/null) and the post-write `workflow_state` assertion all have explicit coverage.
 
-- [ ] **Unit 10: Registration, docs, invariants sweep, version**
+- [x] **Unit 10: Registration, docs, invariants sweep, version**
 
 **Goal:** Everything is wired, documented, and the stated rules match the new behavior.
 
