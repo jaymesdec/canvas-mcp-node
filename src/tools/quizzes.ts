@@ -88,7 +88,7 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
     async (input) => {
       const args = input as z.infer<z.ZodObject<typeof CREATE_QUIZ_INPUT>>;
       return safeHandler("create_quiz", async () => {
-        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
         const quizPayload: Record<string, unknown> = {
           title: args.title,
           quiz_type: args.quiz_type ?? "assignment",
@@ -125,7 +125,7 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
         question: z.infer<typeof QUESTION_PAYLOAD_SCHEMA>;
       };
       return safeHandler("create_quiz_question", async () => {
-        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
         const created = await canvas.post<CanvasQuizQuestionLite>(
           `/api/v1/courses/${courseId}/quizzes/${args.quiz_id}/questions`,
           { question: args.question },

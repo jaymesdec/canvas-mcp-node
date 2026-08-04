@@ -269,7 +269,9 @@ export function registerGradingTools(server: McpServer, canvas: CanvasClient): v
                 return;
               }
               try {
-                const response = await writeGrade(args.course_identifier, args.assignment_id, userId, decision);
+                // Pass the already-resolved numeric id — resolveCourseId short-circuits
+                // numerics, so the whole bulk run costs exactly one course resolution.
+                const response = await writeGrade(courseId, args.assignment_id, userId, decision);
                 stats.graded += 1;
                 written.push({ user_id: userId, response });
               } catch (error) {

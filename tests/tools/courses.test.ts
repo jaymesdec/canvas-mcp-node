@@ -88,6 +88,31 @@ describe("registerCourseTools", () => {
       expect(requests[0]?.params).toMatchObject({ enrollment_state: "active" });
     });
 
+    it("seeds the course-code caches so a later code resolution needs no extra fetch", async () => {
+      const { client, requests } = buildMockCanvas([
+        {
+          status: 200,
+          data: [
+            { id: 60366, name: "Design 9", course_code: "DSGN_9_120251", workflow_state: "available" },
+            { id: 60367, name: "Design 9 (retake)", course_code: "DSGN_9_120251", workflow_state: "available" },
+            { id: 60368, name: "Computing 10", course_code: "CMP_10_120251", workflow_state: "available" },
+          ],
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerCourseTools(harness.server as never, client);
+      await harness.call("list_courses");
+
+      // id→code seeds for every course, duplicates included.
+      expect(client.getCachedCourseCode(60366)).toBe("DSGN_9_120251");
+      expect(client.getCachedCourseCode(60367)).toBe("DSGN_9_120251");
+      expect(client.getCachedCourseCode(60368)).toBe("CMP_10_120251");
+
+      // Unique code resolves from cache with no additional request.
+      await expect(client.resolveCourseId("CMP_10_120251")).resolves.toBe(60368);
+      expect(requests).toHaveLength(1);
+    });
+
     it("threads enrollment_state and include[] through to Canvas", async () => {
       const { client, requests } = buildMockCanvas([{ status: 200, data: [] }]);
       const harness = buildToolHarness();
@@ -123,11 +148,11 @@ describe("registerCourseTools", () => {
       expect(requests[0]?.url).toBe("/api/v1/courses/60366");
     });
 
-    it("resolves a course code via search_term then fetches the course", async () => {
+    it("resolves a course code by exact match over the enrollment list then fetches the course", async () => {
       const { client, requests } = buildMockCanvas([
         {
           status: 200,
-          data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9" }],
+          data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
         },
         {
           status: 200,
@@ -142,13 +167,17 @@ describe("registerCourseTools", () => {
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
       expect(requests).toHaveLength(2);
-      expect(requests[0]?.params).toMatchObject({ search_term: "DSGN_9_120251" });
+      expect(requests[0]?.url).toBe("/api/v1/courses");
+      expect(requests[0]?.params).toMatchObject({
+        "state[]": ["unpublished", "available", "completed"],
+        "include[]": ["term"],
+      });
       expect(requests[1]?.url).toBe("/api/v1/courses/60366");
     });
 
-    it("returns a structured error result on Canvas 404 (no exception thrown)", async () => {
+    it("returns a structured error result when the identifier matches no enrolled course", async () => {
       const { client } = buildMockCanvas([
-        // resolveCourseId via search_term returns no matches → NOT_FOUND
+        // resolveCourseId's enrollment list has no exact match → NOT_FOUND
         { status: 200, data: [] },
       ]);
       const harness = buildToolHarness();
@@ -157,7 +186,18 @@ describe("registerCourseTools", () => {
         course_identifier: "MISSING",
       })) as ToolResponse;
       expect(result.isError).toBe(true);
-      expect(result.content?.[0]?.text).toMatch(/no Canvas course matches/);
+      expect(result.content?.[0]?.text).toMatch(/no enrolled course has an exact course_code or name match/);
+      expect(result.content?.[0]?.text).toMatch(/list_account_courses/);
+    });
+
+    it("seeds the id→code cache from the fetched course", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 60366, course_code: "DSGN_9_120251", name: "Design 9" } },
+      ]);
+      const harness = buildToolHarness();
+      registerCourseTools(harness.server as never, client);
+      await harness.call("get_course_details", { course_identifier: 60366 });
+      expect(client.getCachedCourseCode(60366)).toBe("DSGN_9_120251");
     });
   });
 
@@ -197,6 +237,9 @@ describe("registerCourseTools", () => {
       const courses = parseJsonResult(result).courses as Array<{ course_code: string; name: string }>;
       expect(courses).toHaveLength(2);
       expect(courses.map((course) => course.course_code).sort()).toEqual(["ART 121", "DES 325"]);
+      // Account-course results also seed the id→code cache.
+      expect(client.getCachedCourseCode(881)).toBe("DES 325");
+      expect(client.getCachedCourseCode(902)).toBe("ART 121");
     });
 
     it("defaults account_id from CANVAS_ACCOUNT_ID env var when not passed", async () => {

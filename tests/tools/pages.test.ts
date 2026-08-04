@@ -210,6 +210,51 @@ describe("registerPageTools", () => {
     expect(result.content?.[0]?.text).toMatch(/at least one of title\/body\/slots\/template/);
   });
 
+  describe("bypassCache on write paths", () => {
+    const enrollmentListResponse = {
+      status: 200,
+      data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
+    };
+
+    it("create_page re-resolves a cached course code instead of trusting the cache", async () => {
+      const { client, requests } = buildMockCanvas([
+        enrollmentListResponse,
+        enrollmentListResponse,
+        { status: 200, data: { url: "new", title: "New", published: false } },
+      ]);
+      await client.resolveCourseId("DSGN_9_120251"); // warm the cache
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client);
+      const result = (await harness.call("create_page", {
+        course_identifier: "DSGN_9_120251",
+        title: "New Page",
+        body: "<p>x</p>",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
+      expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/pages");
+    });
+
+    it("edit_page_content re-resolves a cached course code instead of trusting the cache", async () => {
+      const { client, requests } = buildMockCanvas([
+        enrollmentListResponse,
+        enrollmentListResponse,
+        { status: 200, data: { url: "intro", title: "Intro updated" } },
+      ]);
+      await client.resolveCourseId("DSGN_9_120251");
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client);
+      const result = (await harness.call("edit_page_content", {
+        course_identifier: "DSGN_9_120251",
+        page_url: "intro",
+        title: "Intro updated",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
+      expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/pages/intro");
+    });
+  });
+
   describe("page templates", () => {
     it("create_page applies the 'default' template when no template arg is passed", async () => {
       const { client, requests } = buildMockCanvas([

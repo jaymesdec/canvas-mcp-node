@@ -197,7 +197,7 @@ export function registerPageTools(
         omit_sections?: string[];
       };
       return safeHandler("create_page", async () => {
-        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
         // Fetch course.name only when the chosen template actually needs it.
         // Saves an API call per create_page when the template doesn't use {{course_name}}.
@@ -285,7 +285,7 @@ export function registerPageTools(
         omit_sections?: string[];
       };
       return safeHandler("edit_page_content", async () => {
-        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
         // Decide whether to engage template machinery
         const hasTemplateArgs =

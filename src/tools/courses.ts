@@ -115,6 +115,7 @@ export function registerCourseTools(server: McpServer, canvas: CanvasClient): vo
           "/api/v1/courses",
           { params },
         );
+        canvas.seedCourseCodes(items);
 
         const courses = items.map(displayCourse);
         return jsonResult(
@@ -179,6 +180,7 @@ export function registerCourseTools(server: McpServer, canvas: CanvasClient): vo
           }
           throw error;
         }
+        canvas.seedCourseCodes(items);
 
         const courses = items.map(displayCourse);
         return jsonResult(
@@ -217,6 +219,7 @@ export function registerCourseTools(server: McpServer, canvas: CanvasClient): vo
         const course = await canvas.get<CanvasCourseLite>(`/api/v1/courses/${courseId}`, {
           params,
         });
+        canvas.seedCourseCodes([course]);
         return jsonResult(course, {
           summary: `Course ${course.course_code ?? courseId}: ${course.name ?? "(no name)"}`,
         });

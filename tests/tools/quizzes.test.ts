@@ -54,6 +54,51 @@ describe("registerQuizTools", () => {
     });
   });
 
+  it("create_quiz re-resolves a cached course code instead of trusting the cache (bypassCache)", async () => {
+    const enrollmentListResponse = {
+      status: 200,
+      data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
+    };
+    const { client, requests } = buildMockCanvas([
+      enrollmentListResponse,
+      enrollmentListResponse,
+      { status: 200, data: { id: 999, title: "Week 1 Quiz", published: false } },
+    ]);
+    await client.resolveCourseId("DSGN_9_120251"); // warm the cache
+    const harness = buildToolHarness();
+    registerQuizTools(harness.server as never, client);
+    const result = (await harness.call("create_quiz", {
+      course_identifier: "DSGN_9_120251",
+      title: "Week 1 Quiz",
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
+    expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/quizzes");
+  });
+
+  it("create_quiz_question re-resolves a cached course code instead of trusting the cache (bypassCache)", async () => {
+    const enrollmentListResponse = {
+      status: 200,
+      data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
+    };
+    const { client, requests } = buildMockCanvas([
+      enrollmentListResponse,
+      enrollmentListResponse,
+      { status: 200, data: { id: 12, quiz_id: 999, position: 1, question_type: "essay_question", question_text: "Why?", points_possible: 5 } },
+    ]);
+    await client.resolveCourseId("DSGN_9_120251");
+    const harness = buildToolHarness();
+    registerQuizTools(harness.server as never, client);
+    const result = (await harness.call("create_quiz_question", {
+      course_identifier: "DSGN_9_120251",
+      quiz_id: 999,
+      question: { question_text: "Why?", question_type: "essay_question", points_possible: 5 },
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
+    expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/quizzes/999/questions");
+  });
+
   it("create_quiz_question posts the wrapped question payload for multiple_choice", async () => {
     const { client, requests } = buildMockCanvas([
       {

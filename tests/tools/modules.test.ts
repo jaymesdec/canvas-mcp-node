@@ -174,6 +174,31 @@ describe("registerModuleTools", () => {
     expect((requests[0]?.data as { module_item: Record<string, unknown> }).module_item).not.toHaveProperty("content_id");
   });
 
+  it("add_module_item re-resolves a cached course code instead of trusting the cache (bypassCache)", async () => {
+    const enrollmentListResponse = {
+      status: 200,
+      data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
+    };
+    const { client, requests } = buildMockCanvas([
+      enrollmentListResponse,
+      enrollmentListResponse,
+      { status: 200, data: { id: 556, module_id: 11, position: 2, title: "HW1", type: "Assignment", content_id: 9999 } },
+    ]);
+    await client.resolveCourseId("DSGN_9_120251"); // warm the cache
+    const harness = buildToolHarness();
+    registerModuleTools(harness.server as never, client);
+    const result = (await harness.call("add_module_item", {
+      course_identifier: "DSGN_9_120251",
+      module_id: 11,
+      type: "Assignment",
+      title: "HW1",
+      content_id: 9999,
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
+    expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/modules/11/items");
+  });
+
   it("add_module_item for Page without content_id returns a structured error", async () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();

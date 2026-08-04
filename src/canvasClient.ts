@@ -31,7 +31,6 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Per-call retry override. */
   maxRetries?: number;
-  /** Set false to bypass course-code cache lookups inside resolveCourseId (irrelevant here, but documented). */
   responseType?: "json" | "stream" | "arraybuffer";
 }
 
@@ -84,6 +83,28 @@ export function extractNextLink(linkHeader: string | undefined | null): string |
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+interface EnrolledCourse {
+  id: number;
+  course_code?: string | null;
+  name?: string | null;
+  workflow_state?: string | null;
+  term?: { name?: string | null } | null;
+}
+
+const COURSE_CANDIDATE_LIMIT = 10;
+
+function formatCourseCandidate(course: EnrolledCourse): string {
+  const term = course.term?.name ?? "no term";
+  const state = course.workflow_state ?? "unknown state";
+  return `${course.course_code ?? "(no code)"} (id ${course.id}) — ${course.name ?? "(no name)"} [${term}, ${state}]`;
+}
+
+function formatCandidateList(candidates: EnrolledCourse[]): string {
+  const shown = candidates.slice(0, COURSE_CANDIDATE_LIMIT).map(formatCourseCandidate);
+  const overflow = candidates.length - shown.length;
+  return shown.join("; ") + (overflow > 0 ? `; +${overflow} more` : "");
+}
 
 export class CanvasClient {
   readonly baseUrl: string;
@@ -259,10 +280,13 @@ export class CanvasClient {
 
   /**
    * Resolve a course identifier (code or numeric id) to a numeric id.
+   * Non-numeric identifiers resolve ONLY on a unique exact (case-insensitive)
+   * course_code or name match within the caller's own enrollments — zero or
+   * multiple exact matches throw with a candidate list instead of guessing.
    * Caches successful lookups (never evicted; the user has a finite career-long course set).
    *
    * @param identifier  course id (string or number) or course code (e.g. "BADM_554_120251_246794")
-   * @param options.bypassCache  set true for grading write paths so a rename can't misroute the write
+   * @param options.bypassCache  set true for write paths so a rename can't misroute the write
    */
   async resolveCourseId(
     identifier: string | number,
@@ -289,21 +313,62 @@ export class CanvasClient {
       if (cached !== undefined) return cached;
     }
 
-    // search_term hits /api/v1/courses?search_term=...
-    const results = await this.get<Array<{ id: number; course_code?: string; name?: string }>>(
+    // search_term is undocumented on the enrollment-scoped courses endpoint, so
+    // matching is client-side over the full paginated enrollment list. Concluded
+    // states are pinned in so a cross-term duplicate code surfaces as ambiguous
+    // instead of silently resolving to whichever term's course came back.
+    const { items: enrolledCourses } = await this.getPaginated<EnrolledCourse>(
       "/api/v1/courses",
-      { params: { search_term: raw, per_page: 50 } },
+      {
+        params: {
+          "state[]": ["unpublished", "available", "completed"],
+          "include[]": ["term"],
+        },
+      },
+    );
+
+    const exactCodeMatches = enrolledCourses.filter(
+      (course) => course.course_code?.toLowerCase() === cacheKey,
+    );
+    const exactNameMatches = enrolledCourses.filter(
+      (course) => course.name?.toLowerCase() === cacheKey,
     );
 
     const match =
-      results.find((c) => c.course_code?.toLowerCase() === cacheKey) ??
-      results.find((c) => c.name?.toLowerCase() === cacheKey) ??
-      results[0];
+      exactCodeMatches.length === 1
+        ? exactCodeMatches[0]
+        : exactCodeMatches.length === 0 && exactNameMatches.length === 1
+          ? exactNameMatches[0]
+          : undefined;
 
-    if (!match || typeof match.id !== "number") {
+    if (!match) {
+      const ambiguousMatches =
+        exactCodeMatches.length > 1
+          ? exactCodeMatches
+          : exactNameMatches.length > 1
+            ? exactNameMatches
+            : null;
+      if (ambiguousMatches) {
+        throw new CanvasApiError({
+          code: "VALIDATION",
+          message:
+            `resolveCourseId: "${raw}" exactly matches ${ambiguousMatches.length} courses — pass the numeric id to disambiguate. ` +
+            `Candidates: ${formatCandidateList(ambiguousMatches)}.`,
+        });
+      }
+      const substringMatches = enrolledCourses.filter(
+        (course) =>
+          course.course_code?.toLowerCase().includes(cacheKey) ||
+          course.name?.toLowerCase().includes(cacheKey),
+      );
+      const candidates = substringMatches.length > 0 ? substringMatches : enrolledCourses;
+      const candidateText =
+        candidates.length > 0 ? ` Candidates: ${formatCandidateList(candidates)}.` : "";
       throw new CanvasApiError({
         code: "NOT_FOUND",
-        message: `resolveCourseId: no Canvas course matches "${raw}"`,
+        message:
+          `resolveCourseId: no enrolled course has an exact course_code or name match for "${raw}".${candidateText} ` +
+          `Course codes resolve only within your own enrollments — for account-level courses, pass the numeric id from list_account_courses.`,
       });
     }
 
@@ -312,6 +377,30 @@ export class CanvasClient {
       this.courseIdToCode.set(match.id, match.course_code);
     }
     return match.id;
+  }
+
+  /**
+   * Seed the course-code caches from a course list already fetched elsewhere
+   * (list_courses / get_course_details / list_account_courses) so numeric-id
+   * callers keep code-labeled output at zero extra API cost. Codes appearing
+   * more than once in the passed array are ambiguous and skipped for
+   * code→id resolution; id→code always seeds.
+   */
+  seedCourseCodes(courses: Array<{ id: number; course_code?: string | null }>): void {
+    const codeOccurrences = new Map<string, number>();
+    for (const course of courses) {
+      const key = course.course_code?.toLowerCase();
+      if (!key) continue;
+      codeOccurrences.set(key, (codeOccurrences.get(key) ?? 0) + 1);
+    }
+    for (const course of courses) {
+      if (typeof course.id !== "number" || !course.course_code) continue;
+      this.courseIdToCode.set(course.id, course.course_code);
+      const key = course.course_code.toLowerCase();
+      if (codeOccurrences.get(key) === 1) {
+        this.courseCodeCache.set(key, course.id);
+      }
+    }
   }
 
   /** Look up the cached course code for a numeric id, or undefined if not cached. */

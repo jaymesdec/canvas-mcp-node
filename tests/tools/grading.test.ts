@@ -173,6 +173,50 @@ describe("registerGradingTools", () => {
       expect(written.map((entry) => entry.user_id).sort()).toEqual(["1001", "1002", "1003"]);
     });
 
+    it("with a course code resolves the course exactly once for the whole run", async () => {
+      const { client, requests } = buildMockCanvas([
+        // One (and only one) enrollment-list fetch for resolution
+        {
+          status: 200,
+          data: [{ id: 60366, course_code: "DSGN_9_120251", name: "Design 9", workflow_state: "available", term: { name: "Fall 2025" } }],
+        },
+        // submissions list
+        {
+          status: 200,
+          data: [
+            { id: 1, user_id: 1001 },
+            { id: 2, user_id: 1002 },
+            { id: 3, user_id: 1003 },
+          ],
+        },
+        // three writes
+        { status: 200, data: { id: 1, user_id: 1001, grade: "85" } },
+        { status: 200, data: { id: 2, user_id: 1002, grade: "90" } },
+        { status: 200, data: { id: 3, user_id: 1003, grade: "B" } },
+      ]);
+      const harness = buildToolHarness();
+      registerGradingTools(harness.server as never, client);
+      const result = (await harness.call("bulk_grade_submissions", {
+        course_identifier: "DSGN_9_120251",
+        assignment_id: 999,
+        grades: {
+          "1001": { posted_grade: 85 },
+          "1002": { posted_grade: 90 },
+          "1003": { posted_grade: "B" },
+        },
+        rate_limit_delay: 0,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(parseJsonResult(result).graded).toBe(3);
+      const courseListFetches = requests.filter(
+        (request) => request.method === "GET" && request.url === "/api/v1/courses",
+      );
+      expect(courseListFetches).toHaveLength(1);
+      expect(requests).toHaveLength(5); // 1 resolution + 1 submissions list + 3 writes
+      const writes = requests.filter((request) => request.method === "PUT");
+      expect(writes.every((request) => request.url.startsWith("/api/v1/courses/60366/"))).toBe(true);
+    });
+
     it("returns skipped[] for user_ids without a current submission", async () => {
       const { client } = buildMockCanvas([
         // submission list (only 1001 has submitted)

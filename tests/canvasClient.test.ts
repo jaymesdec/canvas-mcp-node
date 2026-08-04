@@ -226,6 +226,35 @@ describe("CanvasClient.request retry behavior", () => {
   });
 });
 
+interface EnrolledCourseFixture {
+  id: number;
+  course_code?: string | null;
+  name?: string | null;
+  workflow_state?: string;
+  term?: { name: string };
+}
+
+function enrolledCourse(
+  id: number,
+  courseCode: string | null,
+  name: string,
+  overrides: Partial<EnrolledCourseFixture> = {},
+): EnrolledCourseFixture {
+  return {
+    id,
+    course_code: courseCode,
+    name,
+    workflow_state: "available",
+    term: { name: "Fall 2025" },
+    ...overrides,
+  };
+}
+
+const ENROLLMENT_LIST_PARAMS = {
+  "state[]": ["unpublished", "available", "completed"],
+  "include[]": ["term"],
+};
+
 describe("CanvasClient.resolveCourseId", () => {
   it("returns numeric id as-is without hitting the network", async () => {
     const { client, requests } = buildClient([]);
@@ -234,45 +263,181 @@ describe("CanvasClient.resolveCourseId", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("falls back to search_term for a course code and caches the result", async () => {
+  it("resolves a unique exact course_code match against the full enrollment list and caches it", async () => {
     const { client, requests } = buildClient([
       {
         status: 200,
         data: [
-          { id: 60366, course_code: "BADM_554_120251_246794", name: "Whatever" },
-          { id: 99999, course_code: "OTHER", name: "Other" },
+          enrolledCourse(60366, "BADM_554_120251_246794", "Whatever"),
+          enrolledCourse(99999, "OTHER", "Other"),
         ],
       },
     ]);
 
-    const firstId = await client.resolveCourseId("BADM_554_120251_246794");
+    const firstId = await client.resolveCourseId("badm_554_120251_246794");
     expect(firstId).toBe(60366);
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.params).toMatchObject({ search_term: "BADM_554_120251_246794" });
+    expect(requests[0]?.url).toBe("/api/v1/courses");
+    expect(requests[0]?.params).toMatchObject(ENROLLMENT_LIST_PARAMS);
 
     // Second call hits the cache — no new request enqueued.
-    const secondId = await client.resolveCourseId("BADM_554_120251_246794");
+    const secondId = await client.resolveCourseId("badm_554_120251_246794");
     expect(secondId).toBe(60366);
     expect(requests).toHaveLength(1);
 
-    // getCachedCourseCode round-trips
     expect(client.getCachedCourseCode(60366)).toBe("BADM_554_120251_246794");
+  });
+
+  it("resolves a unique exact name match when no course_code matches", async () => {
+    const { client } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9_120251", "Design 9"),
+          enrolledCourse(60367, "CMP_10_120251", "Computing 10"),
+        ],
+      },
+    ]);
+    await expect(client.resolveCourseId("design 9")).resolves.toBe(60366);
   });
 
   it("bypasses cache when bypassCache=true so a rename re-resolves", async () => {
     const { client, requests } = buildClient([
-      { status: 200, data: [{ id: 1, course_code: "x" }] },
-      { status: 200, data: [{ id: 1, course_code: "x" }] },
+      { status: 200, data: [enrolledCourse(1, "x", "X Course")] },
+      { status: 200, data: [enrolledCourse(1, "x", "X Course")] },
     ]);
     await client.resolveCourseId("x"); // populates cache
     await client.resolveCourseId("x", { bypassCache: true });
     expect(requests).toHaveLength(2);
   });
 
-  it("throws NOT_FOUND when search_term returns no matches", async () => {
+  it("finds a course on page 2 of the enrollment list", async () => {
+    const { client, requests } = buildClient([
+      {
+        status: 200,
+        data: [enrolledCourse(1, "OTHER_1", "Other 1")],
+        headers: {
+          link: '<https://canvas.example.com/api/v1/courses?page=2&per_page=100>; rel="next"',
+        },
+      },
+      { status: 200, data: [enrolledCourse(60366, "DSGN_9_120251", "Design 9")] },
+    ]);
+    await expect(client.resolveCourseId("DSGN_9_120251")).resolves.toBe(60366);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("throws NOT_FOUND with substring-filtered candidates and the enrollment-scope note on zero exact matches", async () => {
+    const { client } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9_120251", "Design 9"),
+          enrolledCourse(60367, "CMP_10_120251", "Computing 10"),
+        ],
+      },
+    ]);
+    const caught = await client.resolveCourseId("DSGN_9").catch((error) => error);
+    expect(caught).toBeInstanceOf(CanvasApiError);
+    expect(caught).toMatchObject({ code: "NOT_FOUND" });
+    const message = (caught as CanvasApiError).message;
+    expect(message).toContain('no enrolled course has an exact course_code or name match for "DSGN_9"');
+    expect(message).toContain("DSGN_9_120251 (id 60366) — Design 9 [Fall 2025, available]");
+    // Substring-irrelevant course is filtered out of the candidate list.
+    expect(message).not.toContain("CMP_10_120251");
+    expect(message).toContain(
+      "Course codes resolve only within your own enrollments — for account-level courses, pass the numeric id from list_account_courses.",
+    );
+  });
+
+  it("falls back to listing the first 10 enrolled courses when the substring filter yields nothing", async () => {
+    const { client } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9_120251", "Design 9"),
+          enrolledCourse(60367, "CMP_10_120251", "Computing 10"),
+        ],
+      },
+    ]);
+    const caught = await client.resolveCourseId("zzz-no-match").catch((error) => error);
+    expect(caught).toMatchObject({ code: "NOT_FOUND" });
+    const message = (caught as CanvasApiError).message;
+    expect(message).toContain("DSGN_9_120251 (id 60366)");
+    expect(message).toContain("CMP_10_120251 (id 60367)");
+  });
+
+  it("throws VALIDATION listing both terms when a code matches two courses across terms — no write-side guess", async () => {
+    const { client } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9", "Design 9", { term: { name: "Fall 2025" }, workflow_state: "completed" }),
+          enrolledCourse(70477, "DSGN_9", "Design 9", { term: { name: "Fall 2026" }, workflow_state: "available" }),
+        ],
+      },
+    ]);
+    const caught = await client.resolveCourseId("DSGN_9").catch((error) => error);
+    expect(caught).toBeInstanceOf(CanvasApiError);
+    expect(caught).toMatchObject({ code: "VALIDATION" });
+    const message = (caught as CanvasApiError).message;
+    expect(message).toContain('"DSGN_9" exactly matches 2 courses — pass the numeric id to disambiguate');
+    expect(message).toContain("DSGN_9 (id 60366) — Design 9 [Fall 2025, completed]");
+    expect(message).toContain("DSGN_9 (id 70477) — Design 9 [Fall 2026, available]");
+  });
+
+  it("caps the candidate list at 10 with a +N more suffix", async () => {
+    const manyCourses = Array.from({ length: 15 }, (_, index) =>
+      enrolledCourse(1000 + index, `HIST_${index}_120251`, `History ${index}`),
+    );
+    const { client } = buildClient([{ status: 200, data: manyCourses }]);
+    const caught = await client.resolveCourseId("HIST").catch((error) => error);
+    expect(caught).toMatchObject({ code: "NOT_FOUND" });
+    const message = (caught as CanvasApiError).message;
+    expect(message).toContain("+5 more");
+    expect((message.match(/\(id \d+\)/g) ?? []).length).toBe(10);
+  });
+
+  it("throws NOT_FOUND when the enrollment list is empty", async () => {
     const { client } = buildClient([{ status: 200, data: [] }]);
     await expect(client.resolveCourseId("nope")).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe("CanvasClient.seedCourseCodes", () => {
+  it("seeds both maps for unique codes — resolution then needs zero HTTP calls", async () => {
+    const { client, requests } = buildClient([]);
+    client.seedCourseCodes([
+      { id: 60366, course_code: "DSGN_9_120251" },
+      { id: 60367, course_code: "CMP_10_120251" },
+      { id: 60368 }, // no code — skipped without error
+    ]);
+    expect(client.getCachedCourseCode(60366)).toBe("DSGN_9_120251");
+    expect(client.getCachedCourseCode(60367)).toBe("CMP_10_120251");
+    expect(client.getCachedCourseCode(60368)).toBeUndefined();
+    await expect(client.resolveCourseId("DSGN_9_120251")).resolves.toBe(60366);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does not seed duplicated codes into the code→id cache (id→code still seeds)", async () => {
+    const { client, requests } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9", "Design 9", { term: { name: "Fall 2025" } }),
+          enrolledCourse(70477, "DSGN_9", "Design 9", { term: { name: "Fall 2026" } }),
+        ],
+      },
+    ]);
+    client.seedCourseCodes([
+      { id: 60366, course_code: "DSGN_9" },
+      { id: 70477, course_code: "DSGN_9" },
+    ]);
+    expect(client.getCachedCourseCode(60366)).toBe("DSGN_9");
+    expect(client.getCachedCourseCode(70477)).toBe("DSGN_9");
+    // Ambiguous code was not cached — resolution goes to the network and errors honestly.
+    await expect(client.resolveCourseId("DSGN_9")).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(requests).toHaveLength(1);
   });
 });

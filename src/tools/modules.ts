@@ -169,7 +169,7 @@ export function registerModuleTools(server: McpServer, canvas: CanvasClient): vo
         position?: number;
       };
       return safeHandler("add_module_item", async () => {
-        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
         const moduleItemPayload: Record<string, unknown> = {
           type: args.type,
           title: args.title,
