@@ -8,6 +8,10 @@ Full tool catalog, security model, troubleshooting, and architecture notes. For 
 
 All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Parameter names are `snake_case` (matching the Python MCP and Canvas API conventions). Full zod schemas live in `src/tools/<domain>.ts`.
 
+Every tool result is a single compact-JSON text block (plus a one-line summary) — there is no separate `structuredContent` representation, so payloads aren't duplicated into the model's context. List tools return trimmed rows by default; the corresponding `get_*` tool is the full-fidelity escape hatch.
+
+Course identifiers resolve by **unique exact match** (case-insensitive, course code first, then name). An ambiguous identifier errors with a candidate list — pass the numeric id to disambiguate — instead of silently guessing a course.
+
 ### Courses
 
 | Tool | Purpose |
@@ -37,7 +41,10 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 |---|---|
 | `list_modules(course_identifier, include_items?)` | List modules; optionally inline items. |
 | `create_module(course_identifier, name, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Create a new Canvas module. Always **unpublished** at creation (Canvas's default). |
+| `update_module(course_identifier, module_id, name?, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Update module settings. Only provided fields are sent; never touches publish state. |
+| `delete_module(course_identifier, module_id)` | Permanently delete a module. Removes the module structure only — pages/assignments inside remain in the course. |
 | `add_module_item(course_identifier, module_id, type, title, content_id?, position?)` | Add Page/Assignment/Quiz/Discussion/ExternalUrl/SubHeader to a module. `content_id` routes to `page_url`/`external_url`/`content_id` based on type. |
+| `delete_module_item(course_identifier, module_id, item_id)` | Remove one item from a module. The underlying page/assignment/quiz remains in the course. |
 
 ### Pages
 
@@ -56,12 +63,19 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 |---|---|
 | `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Create a quiz. **`published: false` forced.** |
 | `create_quiz_question(course_identifier, quiz_id, question)` | Add a question. `question.question_type` is zod-validated. |
+| `list_quizzes(course_identifier)` | List classic quizzes (id, title, quiz_type, published, due_at, points_possible, question_count). New Quizzes live on a separate API and won't appear here. |
+| `get_quiz(course_identifier, quiz_id)` | Full quiz settings plus its questions (trimmed to id, position, name, type, points, text, answers). |
+| `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Update quiz settings. Never touches published state. |
+| `update_quiz_question(course_identifier, quiz_id, question_id, question)` | Replace a question's content (same payload shape as `create_quiz_question`). Edits on quizzes with submissions create a new quiz version. |
+| `delete_quiz_question(course_identifier, quiz_id, question_id)` | Delete a question from a quiz. Same versioning caveat as `update_quiz_question`. |
 
 ### Assignments
 
 | Tool | Purpose |
 |---|---|
-| `list_assignments(course_identifier, student_id?, include?, anonymous?)` | List assignments. Anonymization-aware when `include[]` contains `submission` or `submission_history`. |
+| `list_assignments(course_identifier, student_id?, include?, include_description?, published_only?, anonymous?)` | List assignments, trimmed to scheduling/grading fields by default — pass `include_description: true` for HTML descriptions, `published_only: true` to filter to published. Anonymization-aware when `include[]` contains `submission` or `submission_history`. |
+| `create_assignment(course_identifier, name, description?, due_at?, unlock_at?, lock_at?, points_possible?, submission_types?)` | Create an assignment. **`published: false` forced.** |
+| `update_assignment(course_identifier, assignment_id, name?, description?, due_at?, unlock_at?, lock_at?, points_possible?, submission_types?)` | Update assignment fields. Never touches published state; warns when Canvas silently ignores a `submission_types` change (happens once students have submitted). |
 | `get_assignment_details(course_identifier, assignment_id)` | Full assignment metadata. |
 | `get_assignment_rubric_details(course_identifier, assignment_id)` | Just the rubric, with a structured `{rubric:null,message}` fallback when no rubric is attached. |
 
@@ -74,11 +88,25 @@ All tools register under the `mcp__canvas-mcp__*` prefix in Claude Desktop. Para
 | `create_rubric(course_identifier, title, criteria, free_form_criterion_comments?, associate_with?)` | Create a new rubric with criteria + ratings. Optionally attach it to an Assignment/Quiz/Discussion in the same API call via `associate_with`. Bypasses the course-code cache. |
 | `create_rubric_association(course_identifier, rubric_id, association_type, association_id, use_for_grading?, hide_score_total?)` | Attach an existing rubric to a different Assignment/Quiz/Discussion. Use for reusing a rubric across multiple assessments. Bypasses the course-code cache. |
 
+### Discussions & announcements
+
+Announcements are Canvas discussion topics under the hood, but they **cannot be drafts** — so instead of the `published: false` rule, `create_announcement` requires a teacher-confirmed future `delayed_post_at` (default floor: 30 minutes out; `CANVAS_MCP_MIN_ANNOUNCEMENT_DELAY_MINUTES` overrides, clamped to ≥5). Missing, past, near, or offset-less timestamps are rejected before any Canvas call.
+
+| Tool | Purpose |
+|---|---|
+| `list_discussions(course_identifier)` | List discussion topics (announcements excluded), trimmed to id/title/published/posted_at/discussion_type/locked/pinned/delayed_post_at/reply_count. |
+| `get_discussion(course_identifier, topic_id, include_entries?, anonymous?)` | One topic plus (by default) its entries. Student entry authors are pseudonymized and roster names scrubbed from message bodies by default (best-effort scrub — FERPA gate). |
+| `create_discussion(course_identifier, title, message, discussion_type?, delayed_post_at?)` | Create a discussion topic. **`published: false` forced.** |
+| `update_discussion(course_identifier, topic_id, title?, message?, discussion_type?, delayed_post_at?, published?)` | Update a topic. Refuses announcements (use `update_announcement`); `published` accepts only `false` (revert to draft). |
+| `list_announcements(course_identifier)` | List announcements without the ±14-day window of the announcements API, so scheduled (`post_delayed`) items appear with their `delayed_post_at`. |
+| `create_announcement(course_identifier, title, message, delayed_post_at)` | Create a **scheduled** announcement. `delayed_post_at` is required: ISO-8601 with explicit offset or `Z`, at least the delay floor in the future. If Canvas reports it went live immediately anyway, the tool deletes it best-effort and errors loudly. |
+| `update_announcement(course_identifier, topic_id, title?, message?, delayed_post_at?)` | Update an announcement. A new `delayed_post_at` obeys the same offset + floor rules; null/empty is rejected (Canvas clears the delay on empty → immediate post). Edits after the post time are live edits. |
+
 ### Submissions (read)
 
 | Tool | Purpose |
 |---|---|
-| `list_submissions(course_identifier, assignment_id, include_rubric_assessment?, include_submission_comments?, anonymous?)` | List submissions for an assignment. Anonymized by default. |
+| `list_submissions(course_identifier, assignment_id, include_rubric_assessment?, include_submission_comments?, anonymous?)` | List submissions for an assignment, trimmed to grading-relevant fields (id, user_id, workflow_state, submitted_at, late, missing, grade, score, attempt, user, attachments, rubric_assessment, submission_comments with `author_id`). Anonymized by default — including comment authors, unless they're course staff. |
 | `get_submission_rubric_assessment(course_identifier, assignment_id, user_id)` | Rubric assessment block with criterion descriptions joined for readability. |
 | `download_submission_attachment(course_identifier, assignment_id, user_id, attachment_id?, target_dir?)` | Stream attachments to disk. Defaults `target_dir` to `./submissions/{courseCode|courseId}/{assignmentId}/`. |
 
@@ -119,8 +147,11 @@ This applies to:
 - `list_users`
 - `list_account_users`
 - `list_assignments` (when `include[]` contains `submission` or `submission_history`)
-- `list_submissions`
+- `list_submissions` (including submission-comment authors — course staff keep real attribution, everyone else is pseudonymized)
+- `get_discussion` (entry authors pseudonymized; roster names scrubbed from topic/entry bodies best-effort)
 - `create_student_anonymization_map` (suppresses `real_name` / `real_email` in the response; pseudonyms are still allocated and persisted to disk)
+
+Trimming always runs on the anonymizer's output, never the raw Canvas payload — a trimmed response can't leak a field the anonymizer would have rewritten.
 
 Pseudonyms persist per-course on disk at `~/.canvas-mcp/anon-maps/{courseId}.json` (override the directory via `ANON_MAP_DIR`). The same student receives the same `Student N` across MCP restarts and weeks of conversations.
 
@@ -141,7 +172,7 @@ For admin workflows that need to look beyond the token-owner's own enrollments:
 
 Both default `account_id` from the `CANVAS_ACCOUNT_ID` env var. By default the .mcpb installer hardcodes this to `self`, which works for admins. A clean "requires account-admin scope" error surfaces if the token is missing the permission.
 
-Non-admin teachers will see the structured error from these two tools and fall back to course-scoped tools (`list_courses`, `list_users` per course). The 28 course-scoped tools all work normally; the two account-scoped tools are the only ones that need admin.
+Non-admin teachers will see the structured error from these two tools and fall back to course-scoped tools (`list_courses`, `list_users` per course). The 45 course-scoped tools all work normally; the two account-scoped tools are the only ones that need admin.
 
 ---
 
@@ -239,9 +270,9 @@ User code tried to reach a host outside the allowlist. Either:
 
 A bug fixed in v0.3.10 — Claude Desktop was launching the MCP from CWD=`/` and the worker couldn't resolve `tsx/esm` via Node's default lookup. Upgrade to v0.3.10 or later.
 
-### "no Canvas course matches ..."
+### "no Canvas course matches ..." / "exactly matches N courses"
 
-Course-code resolution failed. The MCP's `resolveCourseId` calls `GET /api/v1/courses?search_term=...` to map a course code to a numeric id; if no result matches, you get this error. Most often the cause is a typo in the course code or a course you're not enrolled in (and you don't have account-admin to see it). Try `list_account_courses` (if admin) to find it.
+Course-code resolution failed. The MCP's `resolveCourseId` resolves a non-numeric identifier only on a **unique exact match** (case-insensitive) against your enrolled courses — course code first, then course name. No match: usually a typo, or a course you're not enrolled in (try `list_account_courses` if admin, then pass the numeric id). Multiple exact matches (e.g., a cross-term duplicate code): the error lists the candidates with their numeric ids — pass the id to disambiguate. The MCP never fuzzy-guesses a course.
 
 ### "add_module_item: missing page_url parameter" (or similar)
 

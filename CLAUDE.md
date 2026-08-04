@@ -8,10 +8,10 @@ Node + TypeScript MCP server for Canvas LMS. Replaces the Python `canvas-mcp-for
 
 ## Core invariants (do not violate)
 
-1. **FERPA gate.** Every tool that could return real student names anonymizes by default. `anonymous: false` from a caller is **silently overridden** to `true` unless `CANVAS_MCP_ALLOW_DEANONYMIZE=true` is set in the server env. See `src/featureFlags.ts` and `src/tools/users.ts`, `src/tools/assignments.ts`, `src/tools/submissions.ts`, `src/tools/anonymization.ts` for the canonical pattern.
-2. **No auto-publish.** `create_page` and `create_quiz` force `published: false`. Teachers publish after review. This is a cross-project rule (parent `CLAUDE.md`) and applies regardless of school config.
+1. **FERPA gate.** Every tool that could return real student names anonymizes by default. `anonymous: false` from a caller is **silently overridden** to `true` unless `CANVAS_MCP_ALLOW_DEANONYMIZE=true` is set in the server env. See `src/featureFlags.ts` and `src/tools/users.ts`, `src/tools/assignments.ts`, `src/tools/submissions.ts`, `src/tools/anonymization.ts` for the canonical pattern. Response trimming always consumes the anonymizer's output, never the raw payload (anonymize first, trim second).
+2. **No auto-publish.** `create_page`, `create_quiz`, `create_assignment`, and `create_discussion` force `published: false`. Teachers publish after review. Announcements cannot be drafts — `create_announcement` requires a teacher-confirmed future `delayed_post_at` (≥30 min) instead. This is a cross-project rule (parent `CLAUDE.md`) and applies regardless of school config.
 3. **Course-code preferred over numeric id** in user-facing output where both are available.
-4. **Grading writes bypass the course-code cache.** `resolveCourseId(..., { bypassCache: true })` — a course rename mid-session must never silently misroute a write.
+4. **Grading writes resolve with `bypassCache` at least once per invocation.** `resolveCourseId(..., { bypassCache: true })` — a course rename mid-session must never silently misroute a write. Single-submission tools re-resolve every call; `bulk_grade_submissions` resolves once and reuses the numeric id for the whole batch.
 5. **`snake_case` for every tool name and zod schema parameter key.** Matches the Python MCP signatures so the user's existing skills don't need parameter renames. Internal TypeScript variables stay camelCase per TS convention.
 6. **The lifted `src/code_api/` is verbatim from `canvas-mcp-fork`.** Don't modify locally except for narrow, documented TS-strict fixes. Bug fixes flow upstream first, then re-lift.
 
@@ -37,18 +37,22 @@ src/
 ├── schoolConfig.ts         # zod-validated SCHOOL_CONFIG loader
 ├── types.ts                # CanvasApiError, CanvasUserLite, AnonMapFile
 ├── tools/                  # one file per domain; each exports register*Tools(server, ...)
-│   ├── toolHelpers.ts      # jsonResult/textResult/errorResult/safeHandler
+│   ├── toolHelpers.ts      # jsonResult/textResult/errorResult/safeHandler/pickFields
+│   ├── roster.ts           # course roster fetch + staff-id classification (shared FERPA helper)
 │   ├── courses.ts          # list_courses, get_course_details, list_account_courses
-│   ├── modules.ts          # list_modules, add_module_item
-│   ├── assignments.ts      # list_assignments, get_assignment_details, get_assignment_rubric_details
-│   ├── rubrics.ts          # list_all_rubrics, get_rubric_details
+│   ├── modules.ts          # list_modules, create_module, update_module, delete_module, add_module_item, delete_module_item
+│   ├── assignments.ts      # list_assignments, create_assignment, update_assignment, get_assignment_details, get_assignment_rubric_details
+│   ├── rubrics.ts          # list_all_rubrics, get_rubric_details, create_rubric, create_rubric_association
 │   ├── users.ts            # list_users, list_user_enrollments, list_account_users
-│   ├── pages.ts            # list_pages, get_page_content, create_page, edit_page_content
-│   ├── quizzes.ts          # create_quiz, create_quiz_question
+│   ├── pages.ts            # list_pages, get_page_content, create_page, edit_page_content, delete_page, list_page_templates
+│   ├── quizzes.ts          # create_quiz, create_quiz_question, list_quizzes, get_quiz, update_quiz, update_quiz_question, delete_quiz_question
 │   ├── submissions.ts      # list_submissions, get_submission_rubric_assessment, download_submission_attachment
+│   ├── discussionAnonymizer.ts # entry-author pseudonymization + roster-name body scrub (best-effort)
+│   ├── discussions.ts      # list_discussions, get_discussion, create_discussion, update_discussion, list_announcements, create_announcement, update_announcement
 │   ├── grading.ts          # grade_submission, grade_with_rubric, grade_submission_with_rubric, bulk_grade_submissions
 │   ├── anonymization.ts    # create_student_anonymization_map, get_anonymization_status
 │   ├── competencies.ts     # list_competencies (school-config-driven)
+│   ├── school.ts           # get_school_info (school-config-driven)
 │   └── code_exec.ts        # execute_typescript, list_code_api_modules
 ├── workers/
 │   ├── ts_exec_worker.ts   # worker thread entry for execute_typescript

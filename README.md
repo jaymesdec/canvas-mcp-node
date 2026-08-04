@@ -42,6 +42,8 @@ If you genuinely need real names for something (looking up a Canvas user_id by n
 
 - Canvas pages → created as **drafts**, every time
 - Canvas modules → created **unpublished**, every time
+- Canvas assignments, quizzes, and discussions → created **unpublished**, every time
+- Canvas announcements → can't be drafts, so they're always **scheduled**: you confirm a future post time (at least 30 minutes out) and can review or delete before it goes live
 - Grades → written but anchored to your assignment's posting policy. If posting is manual, grades stay hidden until you click Post Grades
 
 The MCP physically can't bypass these — they're enforced at the server level, not just suggested in skill prompts. **You** publish things. Always.
