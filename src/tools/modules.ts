@@ -71,6 +71,16 @@ const DELETE_MODULE_ITEM_INPUT = {
   item_id: z.union([z.string(), z.number()]).describe("Numeric id of the module item to remove."),
 };
 
+const UPDATE_MODULE_ITEM_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  module_id: z.union([z.string(), z.number()]).describe("Numeric id of the module containing the item."),
+  item_id: z.union([z.string(), z.number()]).describe("Numeric id of the module item to update."),
+  title: z.string().optional().describe("New item title."),
+  position: z.number().int().positive().optional().describe("1-based position within the module."),
+  indent: z.number().int().min(0).optional().describe("Indent level (0 = flush left)."),
+  new_tab: z.boolean().optional().describe("For ExternalUrl items: open in a new browser tab."),
+};
+
 const ADD_MODULE_ITEM_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   module_id: z.union([z.string(), z.number()]),
@@ -97,8 +107,22 @@ interface CanvasModule {
   name: string;
   position?: number;
   workflow_state?: string;
+  published?: boolean;
+  unlock_at?: string | null;
+  require_sequential_progress?: boolean;
+  prerequisite_module_ids?: number[];
   items_count?: number;
-  items?: Array<{ id: number; title: string; type: string; content_id?: number }>;
+  items?: Array<{
+    id: number;
+    title: string;
+    type: string;
+    content_id?: number;
+    page_url?: string;
+    position?: number;
+    published?: boolean;
+    indent?: number;
+    new_tab?: boolean;
+  }>;
 }
 
 interface CanvasModuleItem {
@@ -109,6 +133,9 @@ interface CanvasModuleItem {
   type: string;
   content_id?: number;
   page_url?: string;
+  published?: boolean;
+  indent?: number;
+  new_tab?: boolean;
 }
 
 const MODULE_DISPLAY_KEYS = [
@@ -295,9 +322,54 @@ export function registerModuleTools(server: McpServer, canvas: CanvasClient): vo
           `/api/v1/courses/${courseId}/modules/${args.module_id}/items/${args.item_id}`,
         );
         return jsonResult(
-          { course_id: courseId, module_id: args.module_id, item: deleted },
+          {
+            course_id: courseId,
+            module_id: args.module_id,
+            item: pickFields(deleted as unknown as Record<string, unknown>, MODULE_ITEM_DISPLAY_KEYS),
+          },
           {
             summary: `Deleted ${deleted.type} item "${deleted.title}" (id ${deleted.id}) from module ${args.module_id} in course ${courseId}. The underlying content remains in the course.`,
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "update_module_item",
+    {
+      description:
+        "Update a module item's title, position, indent, or new_tab. Only the fields you pass are sent to Canvas. Never touches publish state (per the cross-project never-auto-publish rule — a module item's published flag controls student visibility); teacher publishes manually in Canvas. Bypasses the course-code cache so a rename mid-session can't misroute the write.",
+      inputSchema: UPDATE_MODULE_ITEM_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof UPDATE_MODULE_ITEM_INPUT>>;
+      return safeHandler("update_module_item", async () => {
+        const moduleItemPayload: Record<string, unknown> = {};
+        if (args.title !== undefined) moduleItemPayload.title = args.title;
+        if (args.position !== undefined) moduleItemPayload.position = args.position;
+        if (args.indent !== undefined) moduleItemPayload.indent = args.indent;
+        if (args.new_tab !== undefined) moduleItemPayload.new_tab = args.new_tab;
+
+        if (Object.keys(moduleItemPayload).length === 0) {
+          throw new Error(
+            "update_module_item: no fields to update. Pass at least one of title, position, indent, new_tab.",
+          );
+        }
+
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const updated = await canvas.put<CanvasModuleItem>(
+          `/api/v1/courses/${courseId}/modules/${args.module_id}/items/${args.item_id}`,
+          { module_item: moduleItemPayload },
+        );
+        return jsonResult(
+          {
+            course_id: courseId,
+            module_id: args.module_id,
+            item: pickFields(updated as unknown as Record<string, unknown>, MODULE_ITEM_DISPLAY_KEYS),
+          },
+          {
+            summary: `Updated ${updated.type} item "${updated.title}" (id ${updated.id}) in module ${args.module_id}, course ${courseId}: ${Object.keys(moduleItemPayload).join(", ")}.`,
           },
         );
       });

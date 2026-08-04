@@ -150,6 +150,16 @@ const UPDATE_ANNOUNCEMENT_INPUT = {
     ),
 };
 
+const DELETE_DISCUSSION_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  topic_id: z.union([z.string(), z.number()]),
+};
+
+const DELETE_ANNOUNCEMENT_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  topic_id: z.union([z.string(), z.number()]),
+};
+
 interface CanvasDiscussionTopic {
   id: number;
   title?: string;
@@ -167,7 +177,7 @@ interface CanvasDiscussionTopic {
   author?: { id?: number | string; display_name?: string } | null;
 }
 
-const DISCUSSION_LIST_DISPLAY_KEYS = [
+const DISCUSSION_DISPLAY_KEYS = [
   "id",
   "title",
   "published",
@@ -176,17 +186,6 @@ const DISCUSSION_LIST_DISPLAY_KEYS = [
   "locked",
   "pinned",
   "delayed_post_at",
-] as const;
-
-const DISCUSSION_TOPIC_DISPLAY_KEYS = [
-  "id",
-  "title",
-  "published",
-  "posted_at",
-  "delayed_post_at",
-  "discussion_type",
-  "locked",
-  "pinned",
 ] as const;
 
 const ANNOUNCEMENT_DISPLAY_KEYS = [
@@ -201,13 +200,20 @@ const ANNOUNCEMENT_DISPLAY_KEYS = [
 const ENTRY_DISPLAY_KEYS = ["id", "user_id", "user_name", "message", "created_at"] as const;
 
 function displayDiscussion(topic: CanvasDiscussionTopic): Record<string, unknown> {
-  const trimmed = pickFields(topic as unknown as Record<string, unknown>, DISCUSSION_LIST_DISPLAY_KEYS);
+  const trimmed = pickFields(topic as unknown as Record<string, unknown>, DISCUSSION_DISPLAY_KEYS);
   trimmed.reply_count = topic.discussion_subentry_count ?? null;
   return trimmed;
 }
 
-function displayAnnouncement(topic: CanvasDiscussionTopic): Record<string, unknown> {
-  return pickFields(topic as unknown as Record<string, unknown>, ANNOUNCEMENT_DISPLAY_KEYS);
+function displayAnnouncement(
+  topic: CanvasDiscussionTopic,
+  options: { includeMessage?: boolean } = {},
+): Record<string, unknown> {
+  const trimmed = pickFields(topic as unknown as Record<string, unknown>, ANNOUNCEMENT_DISPLAY_KEYS);
+  // Write tools echo the message so the caller can confirm what was posted;
+  // list_announcements stays message-less for payload weight.
+  if (options.includeMessage) trimmed.message = topic.message ?? null;
+  return trimmed;
 }
 
 function displayEntry(entry: DiscussionEntryLike): Record<string, unknown> {
@@ -259,7 +265,7 @@ export function registerDiscussionTools(
     "get_discussion",
     {
       description:
-        "Fetch one discussion topic and (by default) its entries. Entries come from the paginated /entries endpoint rather than /view — /view can 503 while its cache builds and 403s on require_initial_post topics even for a teacher token. " +
+        "Fetch one discussion topic and (by default) its entries. Also fetches announcements by topic_id — announcements are discussion topics under the hood, so this is the tool for reading an announcement's message body. Entries come from the paginated /entries endpoint rather than /view — /view can 503 while its cache builds and 403s on require_initial_post topics even for a teacher token. " +
         "Student entry authors are pseudonymized and roster names are scrubbed from the topic body and every entry body by default (FERPA gate); set anonymous=false only with CANVAS_MCP_ALLOW_DEANONYMIZE=true on the server.",
       inputSchema: GET_DISCUSSION_INPUT,
     },
@@ -325,7 +331,7 @@ export function registerDiscussionTools(
 
         const trimmedTopic = pickFields(
           topic as unknown as Record<string, unknown>,
-          DISCUSSION_TOPIC_DISPLAY_KEYS,
+          DISCUSSION_DISPLAY_KEYS,
         );
         trimmedTopic.message = topicMessage;
         trimmedTopic.author = author;
@@ -437,7 +443,7 @@ export function registerDiscussionTools(
     "list_announcements",
     {
       description:
-        "List a course's announcements via discussion_topics?only_announcements=true — unlike GET /api/v1/announcements this has no ±14-day window, so scheduled (post_delayed) announcements appear with their delayed_post_at.",
+        "List a course's announcements via discussion_topics?only_announcements=true — unlike GET /api/v1/announcements this has no ±14-day window, so scheduled (post_delayed) announcements appear with their delayed_post_at. Message bodies are omitted for payload weight — use get_discussion with the topic_id to read a message body.",
       inputSchema: LIST_ANNOUNCEMENTS_INPUT,
     },
     async (input) => {
@@ -454,7 +460,7 @@ export function registerDiscussionTools(
             count: topics.length,
             pages,
             truncated,
-            announcements: topics.map(displayAnnouncement),
+            announcements: topics.map((topic) => displayAnnouncement(topic)),
           },
           { summary: `Course ${courseId}: ${topics.length} announcement(s).` },
         );
@@ -484,9 +490,18 @@ export function registerDiscussionTools(
 
         if (created.workflow_state !== "post_delayed") {
           try {
-            await canvas.del(`${discussionTopicsPath(courseId)}/${created.id}`);
-          } catch {
-            // best-effort cleanup — the thrown error below carries the remediation either way
+            // Tight timeout + no retries: a hanging cleanup must not stall the
+            // error path — the thrown error below carries the remediation.
+            await canvas.del(`${discussionTopicsPath(courseId)}/${created.id}`, {
+              timeoutMs: 10000,
+              maxRetries: 0,
+            });
+          } catch (cleanupError) {
+            const message =
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            process.stderr.write(
+              `[create_announcement] best-effort cleanup DELETE of topic ${created.id} failed: ${message}\n`,
+            );
           }
           throw new CanvasApiError({
             code: "VALIDATION",
@@ -498,7 +513,7 @@ export function registerDiscussionTools(
         }
 
         return jsonResult(
-          { course_id: courseId, announcement: displayAnnouncement(created) },
+          { course_id: courseId, announcement: displayAnnouncement(created, { includeMessage: true }) },
           {
             summary: `Created scheduled announcement "${created.title ?? args.title}" (id ${created.id}) — goes live at ${delayedPostAt}.`,
           },
@@ -548,12 +563,84 @@ export function registerDiscussionTools(
         }
 
         return jsonResult(
-          { course_id: courseId, announcement: displayAnnouncement(updated) },
+          { course_id: courseId, announcement: displayAnnouncement(updated, { includeMessage: true }) },
           {
             summary:
               `Updated announcement ${updated.id}: "${updated.title ?? ""}"` +
               (args.delayed_post_at !== undefined ? ` — goes live at ${args.delayed_post_at}` : "") +
               ".",
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_discussion",
+    {
+      description:
+        "Permanently delete a Canvas discussion topic and its entries. Refuses announcements — use delete_announcement. Bypasses the course-code cache so a rename mid-session can't misroute the delete.",
+      inputSchema: DELETE_DISCUSSION_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof DELETE_DISCUSSION_INPUT>>;
+      return safeHandler("delete_discussion", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const existing = await canvas.get<CanvasDiscussionTopic>(
+          `${discussionTopicsPath(courseId)}/${args.topic_id}`,
+        );
+        if (existing.is_announcement === true) {
+          throw new CanvasApiError({
+            code: "VALIDATION",
+            message:
+              `delete_discussion: topic ${args.topic_id} is an announcement — use delete_announcement instead.`,
+          });
+        }
+
+        await canvas.del(`${discussionTopicsPath(courseId)}/${args.topic_id}`);
+        return jsonResult(
+          { course_id: courseId, deleted: true, discussion: displayDiscussion(existing) },
+          {
+            summary: `Deleted discussion ${existing.id}: "${existing.title ?? ""}" from course ${courseId} (entries deleted with it).`,
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_announcement",
+    {
+      description:
+        "Permanently delete a Canvas announcement — works both before the scheduled post time (cancels it) and after (removes the live announcement). Refuses plain discussions — use delete_discussion. Bypasses the course-code cache so a rename mid-session can't misroute the delete.",
+      inputSchema: DELETE_ANNOUNCEMENT_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof DELETE_ANNOUNCEMENT_INPUT>>;
+      return safeHandler("delete_announcement", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const existing = await canvas.get<CanvasDiscussionTopic>(
+          `${discussionTopicsPath(courseId)}/${args.topic_id}`,
+        );
+        if (existing.is_announcement !== true) {
+          throw new CanvasApiError({
+            code: "VALIDATION",
+            message:
+              `delete_announcement: topic ${args.topic_id} is a plain discussion, not an announcement — use delete_discussion instead.`,
+          });
+        }
+
+        await canvas.del(`${discussionTopicsPath(courseId)}/${args.topic_id}`);
+        const wasLive = existing.workflow_state !== "post_delayed";
+        return jsonResult(
+          { course_id: courseId, deleted: true, announcement: displayAnnouncement(existing) },
+          {
+            summary:
+              `Deleted announcement ${existing.id}: "${existing.title ?? ""}" from course ${courseId} — ` +
+              (wasLive
+                ? "it had already posted; it is now removed for students."
+                : "it was still scheduled and never went live.") +
+              " Deletion works before or after the post time.",
           },
         );
       });

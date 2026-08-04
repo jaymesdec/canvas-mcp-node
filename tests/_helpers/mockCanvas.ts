@@ -153,7 +153,10 @@ export function parseJsonResult<T = Record<string, unknown>>(result: ToolRespons
   if (typeof text !== "string") {
     throw new Error("parseJsonResult: result has no text content");
   }
-  const separatorIndex = text.indexOf("\n\n");
+  // The payload is compact single-line JSON appended after the summary, so
+  // everything past the LAST blank-line separator is the JSON — a summary
+  // containing embedded blank lines can't break parsing.
+  const separatorIndex = text.lastIndexOf("\n\n");
   const jsonText = separatorIndex >= 0 ? text.slice(separatorIndex + 2) : text;
   return JSON.parse(jsonText) as T;
 }

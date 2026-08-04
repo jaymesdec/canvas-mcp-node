@@ -59,8 +59,13 @@ export function buildNameScrubber(replacements: NameReplacement[]): (text: strin
     if (firstName !== fullName) tokens.push({ token: firstName, pseudonym });
   }
   tokens.sort((a, b) => b.token.length - a.token.length);
+  // Lookarounds instead of \b: \b anchors to \w = [A-Za-z0-9_], so a name that
+  // starts/ends in a non-word char (accented letters like "René", "Jr.", a
+  // trailing apostrophe) would demand an adjacent word char and silently fail
+  // to match — leaking the name. The lookarounds only require the neighbor to
+  // not be a word char, which holds at string edges too.
   const patterns = tokens.map(({ token, pseudonym }) => ({
-    regex: new RegExp(`\\b${escapeRegExp(token)}\\b`, "gi"),
+    regex: new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(token)}(?![A-Za-z0-9_])`, "gi"),
     pseudonym,
   }));
 

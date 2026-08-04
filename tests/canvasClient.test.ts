@@ -406,8 +406,16 @@ describe("CanvasClient.resolveCourseId", () => {
 });
 
 describe("CanvasClient.seedCourseCodes", () => {
-  it("seeds both maps for unique codes — resolution then needs zero HTTP calls", async () => {
-    const { client, requests } = buildClient([]);
+  it("seeds only the id→code display map — getCachedCourseCode works, forward resolution still walks enrollments", async () => {
+    const { client, requests } = buildClient([
+      {
+        status: 200,
+        data: [
+          enrolledCourse(60366, "DSGN_9_120251", "Design 9"),
+          enrolledCourse(60367, "CMP_10_120251", "Computing 10"),
+        ],
+      },
+    ]);
     client.seedCourseCodes([
       { id: 60366, course_code: "DSGN_9_120251" },
       { id: 60367, course_code: "CMP_10_120251" },
@@ -416,11 +424,12 @@ describe("CanvasClient.seedCourseCodes", () => {
     expect(client.getCachedCourseCode(60366)).toBe("DSGN_9_120251");
     expect(client.getCachedCourseCode(60367)).toBe("CMP_10_120251");
     expect(client.getCachedCourseCode(60368)).toBeUndefined();
+    // Never populates the forward cache — resolution does its own exact-match walk.
     await expect(client.resolveCourseId("DSGN_9_120251")).resolves.toBe(60366);
-    expect(requests).toHaveLength(0);
+    expect(requests).toHaveLength(1);
   });
 
-  it("does not seed duplicated codes into the code→id cache (id→code still seeds)", async () => {
+  it("a seed of an ambiguous code cannot poison forward resolution — the walk errors honestly", async () => {
     const { client, requests } = buildClient([
       {
         status: 200,
@@ -430,14 +439,69 @@ describe("CanvasClient.seedCourseCodes", () => {
         ],
       },
     ]);
-    client.seedCourseCodes([
-      { id: 60366, course_code: "DSGN_9" },
-      { id: 70477, course_code: "DSGN_9" },
-    ]);
+    // e.g. an account-scoped search returned only ONE of the two DSGN_9 courses
+    client.seedCourseCodes([{ id: 60366, course_code: "DSGN_9" }]);
     expect(client.getCachedCourseCode(60366)).toBe("DSGN_9");
-    expect(client.getCachedCourseCode(70477)).toBe("DSGN_9");
-    // Ambiguous code was not cached — resolution goes to the network and errors honestly.
     await expect(client.resolveCourseId("DSGN_9")).rejects.toMatchObject({ code: "VALIDATION" });
     expect(requests).toHaveLength(1);
+  });
+
+  it("resolveCourseId's own successful exact-match walk still populates the forward cache", async () => {
+    const { client, requests } = buildClient([
+      { status: 200, data: [enrolledCourse(60366, "DSGN_9_120251", "Design 9")] },
+    ]);
+    await expect(client.resolveCourseId("DSGN_9_120251")).resolves.toBe(60366);
+    await expect(client.resolveCourseId("DSGN_9_120251")).resolves.toBe(60366);
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe("CanvasClient.resolveCourseId truncation note", () => {
+  const pageWithNext = (page: number) => ({
+    status: 200,
+    data: [enrolledCourse(1000 + page, `OTHER_${page}`, `Other ${page}`)],
+    headers: {
+      link: `<https://canvas.example.com/api/v1/courses?page=${page + 1}>; rel="next"`,
+    },
+  });
+
+  it("appends the truncation note to the zero-match error when the enrollment walk hit maxPages", async () => {
+    // buildClient sets maxPages: 5 — every page advertises a next link.
+    const { client } = buildClient([1, 2, 3, 4, 5].map(pageWithNext));
+    const caught = await client.resolveCourseId("zzz-no-match").catch((error) => error);
+    expect(caught).toMatchObject({ code: "NOT_FOUND" });
+    expect((caught as CanvasApiError).message).toContain(
+      "the course list was truncated — the course may exist on an unfetched page",
+    );
+  });
+
+  it("appends the truncation note to the ambiguous error when the enrollment walk hit maxPages", async () => {
+    const duplicatePage = (page: number, id: number) => ({
+      status: 200,
+      data: [enrolledCourse(id, "DSGN_9", "Design 9")],
+      headers: {
+        link: `<https://canvas.example.com/api/v1/courses?page=${page + 1}>; rel="next"`,
+      },
+    });
+    const { client } = buildClient([
+      duplicatePage(1, 60366),
+      duplicatePage(2, 70477),
+      pageWithNext(3),
+      pageWithNext(4),
+      pageWithNext(5),
+    ]);
+    const caught = await client.resolveCourseId("DSGN_9").catch((error) => error);
+    expect(caught).toMatchObject({ code: "VALIDATION" });
+    expect((caught as CanvasApiError).message).toContain(
+      "the course list was truncated — the course may exist on an unfetched page",
+    );
+  });
+
+  it("omits the truncation note when the walk completed", async () => {
+    const { client } = buildClient([
+      { status: 200, data: [enrolledCourse(60366, "DSGN_9_120251", "Design 9")] },
+    ]);
+    const caught = await client.resolveCourseId("zzz-no-match").catch((error) => error);
+    expect((caught as CanvasApiError).message).not.toContain("truncated");
   });
 });

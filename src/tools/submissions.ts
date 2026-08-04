@@ -158,15 +158,17 @@ export async function anonymizeNonStaffCommentAuthors(
       if (!rawComment || typeof rawComment !== "object") return rawComment;
       const comment = rawComment as Record<string, unknown>;
       const author = comment.author as CanvasUserLite | undefined;
-      const authorId = author?.id ?? comment.author_id;
-      if (authorId === undefined || authorId === null) {
+      const rawAuthorId: unknown = author?.id ?? comment.author_id;
+      const authorId =
+        typeof rawAuthorId === "number" || typeof rawAuthorId === "string" ? rawAuthorId : null;
+      if (authorId === null) {
         if (comment.author_name === undefined && comment.author === undefined) return comment;
         return { ...comment, author: null, author_name: UNKNOWN_COMMENTER_PLACEHOLDER };
       }
       if (staffIds.has(String(authorId))) return comment;
 
       const sourceAuthor: CanvasUserLite = author ?? {
-        id: authorId as number | string,
+        id: authorId,
         name: typeof comment.author_name === "string" ? comment.author_name : undefined,
       };
       const anonymizedAuthor = await anonymizer.anonymizeUser(courseId, sourceAuthor, {

@@ -98,6 +98,7 @@ interface CanvasQuizLite {
   html_url?: string;
   due_at?: string | null;
   points_possible?: number | null;
+  question_count?: number;
 }
 
 const QUIZ_DISPLAY_KEYS = [
@@ -109,6 +110,23 @@ const QUIZ_DISPLAY_KEYS = [
   "points_possible",
   "question_count",
   "html_url",
+] as const;
+
+// get_quiz is the inspect tool, so it adds the settings fields on top of the
+// list shape. access_code is fine for the teacher but kept explicit here so
+// its exposure is a deliberate allowlist entry, not an accident.
+const QUIZ_DETAIL_DISPLAY_KEYS = [
+  ...QUIZ_DISPLAY_KEYS,
+  "description",
+  "shuffle_answers",
+  "allowed_attempts",
+  "time_limit",
+  "one_question_at_a_time",
+  "hide_results",
+  "scoring_policy",
+  "access_code",
+  "unlock_at",
+  "lock_at",
 ] as const;
 
 function displayQuiz(quiz: CanvasQuizLite): Record<string, unknown> {
@@ -236,7 +254,7 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
   server.registerTool(
     "get_quiz",
     {
-      description: `Fetch a Canvas quiz's full settings plus its questions (trimmed to id, position, name, type, points, text, answers). ${CLASSIC_QUIZZES_ONLY_NOTE}`,
+      description: `Fetch a Canvas quiz's settings (list fields plus description, shuffle_answers, allowed_attempts, time_limit, one_question_at_a_time, hide_results, scoring_policy, access_code, unlock_at, lock_at) and its questions (trimmed to id, position, name, type, points, text, answers). ${CLASSIC_QUIZZES_ONLY_NOTE}`,
       inputSchema: GET_QUIZ_INPUT,
     },
     async (input) => {
@@ -251,7 +269,13 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
         ]);
         const questions = questionsPage.items.map(displayQuizQuestion);
         return jsonResult(
-          { quiz, question_count: questions.length, questions },
+          {
+            quiz: pickFields(quiz as unknown as Record<string, unknown>, QUIZ_DETAIL_DISPLAY_KEYS),
+            question_count: questions.length,
+            question_pages: questionsPage.pages,
+            questions_truncated: questionsPage.truncated,
+            questions,
+          },
           { summary: `Quiz "${quiz.title}" (id ${quiz.id}): ${questions.length} question(s).` },
         );
       });

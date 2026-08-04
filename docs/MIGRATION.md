@@ -261,7 +261,7 @@ If a skill behaves unexpectedly, run `list_code_api_modules` or check the new MC
 
 ## v0.4.0 — new tools + output changes
 
-Seventeen new tools plus output-shape changes from the token-efficiency pass. Existing tool names and parameters are unchanged — additions only — but a few output shapes changed in ways worth knowing when a skill inspects specific fields.
+Twenty new tools plus output-shape changes from the token-efficiency pass. Existing tool names and parameters are unchanged — additions only — but a few output shapes changed in ways worth knowing when a skill inspects specific fields.
 
 ### New tools
 
@@ -281,6 +281,7 @@ Quizzes (classic only — New Quizzes are on a separate API and show up in `list
 Modules:
 
 - `update_module(course_identifier, module_id, name?, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` — partial update.
+- `update_module_item(course_identifier, module_id, item_id, title?, position?, indent?, new_tab?)` — partial update of one module item. Deliberately no `published` parameter — a module item's published flag controls student visibility, so publish stays manual (never-auto-publish rule).
 - `delete_module(course_identifier, module_id)` — removes the module shell; contents remain in the course.
 - `delete_module_item(course_identifier, module_id, item_id)` — removes the module entry; underlying content remains.
 
@@ -290,16 +291,24 @@ Discussions:
 - `get_discussion(course_identifier, topic_id, include_entries?, anonymous?)` — topic + entries; student authors pseudonymized, roster names scrubbed from bodies (best-effort) by default.
 - `create_discussion(course_identifier, title, message, discussion_type?, delayed_post_at?)` — created unpublished, always.
 - `update_discussion(course_identifier, topic_id, ...)` — partial update; refuses announcements; `published` accepts only `false`.
+- `delete_discussion(course_identifier, topic_id)` — permanently deletes a discussion topic and its entries; refuses announcements (use `delete_announcement`).
 
 Announcements (cannot be drafts, so scheduling replaces the draft rule):
 
 - `list_announcements(course_identifier)` — windowless list; scheduled (`post_delayed`) items appear with `delayed_post_at`.
 - `create_announcement(course_identifier, title, message, delayed_post_at)` — `delayed_post_at` REQUIRED: ISO-8601 with explicit offset or `Z`, at least 30 minutes in the future (env-tunable floor). Skills must ask the teacher to confirm the post time.
 - `update_announcement(course_identifier, topic_id, title?, message?, delayed_post_at?)` — same floor rules for a new time; null/empty rejected; edits after the post time are live.
+- `delete_announcement(course_identifier, topic_id)` — permanently deletes an announcement, before the post time (cancels the schedule) or after (removes the live announcement); refuses plain discussions (use `delete_discussion`).
+
+Deliberately excluded: **`delete_assignment` and `delete_quiz` do not exist** — assignments and quizzes are grade-bearing objects, and deleting one destroys student submissions and grades. Delete those in the Canvas UI, where Canvas shows its own confirmation and impact warnings.
 
 ### Output-shape changes
 
 - **`list_assignments` is trimmed by default.** Rows carry scheduling/grading fields (id, name, due_at, unlock_at, lock_at, points_possible, published, workflow_state, submission_types, has_rubric) — HTML descriptions are omitted unless `include_description: true`, and `published_only: true` filters to published assignments. The `write-narratives` skill already called `list_assignments` expecting compact rows — its existing calls now work as intended without post-filtering. Any skill that needs the full assignment body should call `get_assignment_details`.
 - **`list_submissions` is trimmed.** Rows keep id, user_id, workflow_state, submitted_at, late, missing, grade, score, **`attempt`**, user, attachments, rubric_assessment, and submission_comments — and each comment keeps its **`author_id`** — both of which `grade-submissions` depends on. Submission-comment **authors are now anonymized unless they're course staff** (teachers/TAs keep real attribution); previously non-staff commenters could come through verbatim.
+- **`list_submissions` nested objects are allowlisted too.** `user` keeps `{id, name, email}`; `attachments` keep `{id, filename, display_name, content_type, size}` — the signed download `url` is **intentionally removed** (it embeds a bearer-equivalent verifier), use `download_submission_attachment` instead; `submission_comments` keep `{id, author_id, author_name, comment, created_at, attempt}`.
+- **`list_modules` is trimmed.** Modules carry id, name, position, workflow_state, published, items_count, unlock_at, require_sequential_progress, prerequisite_module_ids (plus `items` trimmed to id, title, type, content_id, page_url, position, published when `include_items: true`).
+- **`create_quiz` returns a trimmed response** (id, title, quiz_type, published, due_at, points_possible, question_count, html_url). Call `get_quiz` for the full settings (description, shuffle_answers, allowed_attempts, time_limit, access_code, ...).
+- **`execute_typescript` returns human-readable text only.** The structured result object was removed — parse the printed stdout/stderr text; don't expect a JSON payload block.
 - **Course-code ambiguity errors instead of guessing.** A non-numeric `course_identifier` resolves only on a unique exact match (code first, then name). Multiple exact matches return an error listing the candidate courses with numeric ids — the model self-corrects by passing the id. Skills that relied on fuzzy near-miss resolution should switch to exact codes or numeric ids.
 - **`structuredContent` removed.** Tool results are now a single compact-JSON text block plus a one-line summary — payloads are no longer duplicated. No skill in the current audit reads `structuredContent`, so no changes are expected; if one asserts on it, parse the text block's JSON instead.

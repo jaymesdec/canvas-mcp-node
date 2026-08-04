@@ -317,7 +317,7 @@ export class CanvasClient {
     // matching is client-side over the full paginated enrollment list. Concluded
     // states are pinned in so a cross-term duplicate code surfaces as ambiguous
     // instead of silently resolving to whichever term's course came back.
-    const { items: enrolledCourses } = await this.getPaginated<EnrolledCourse>(
+    const { items: enrolledCourses, truncated } = await this.getPaginated<EnrolledCourse>(
       "/api/v1/courses",
       {
         params: {
@@ -326,6 +326,9 @@ export class CanvasClient {
         },
       },
     );
+    const truncationNote = truncated
+      ? " (note: the course list was truncated — the course may exist on an unfetched page)"
+      : "";
 
     const exactCodeMatches = enrolledCourses.filter(
       (course) => course.course_code?.toLowerCase() === cacheKey,
@@ -353,7 +356,7 @@ export class CanvasClient {
           code: "VALIDATION",
           message:
             `resolveCourseId: "${raw}" exactly matches ${ambiguousMatches.length} courses — pass the numeric id to disambiguate. ` +
-            `Candidates: ${formatCandidateList(ambiguousMatches)}.`,
+            `Candidates: ${formatCandidateList(ambiguousMatches)}.${truncationNote}`,
         });
       }
       const substringMatches = enrolledCourses.filter(
@@ -368,7 +371,7 @@ export class CanvasClient {
         code: "NOT_FOUND",
         message:
           `resolveCourseId: no enrolled course has an exact course_code or name match for "${raw}".${candidateText} ` +
-          `Course codes resolve only within your own enrollments — for account-level courses, pass the numeric id from list_account_courses.`,
+          `Course codes resolve only within your own enrollments — for account-level courses, pass the numeric id from list_account_courses.${truncationNote}`,
       });
     }
 
@@ -380,26 +383,20 @@ export class CanvasClient {
   }
 
   /**
-   * Seed the course-code caches from a course list already fetched elsewhere
+   * Seed the id→code display map from a course list already fetched elsewhere
    * (list_courses / get_course_details / list_account_courses) so numeric-id
-   * callers keep code-labeled output at zero extra API cost. Codes appearing
-   * more than once in the passed array are ambiguous and skipped for
-   * code→id resolution; id→code always seeds.
+   * callers keep code-labeled output at zero extra API cost. NEVER populates
+   * the forward code→id resolution cache: a seed source can be a partial view
+   * (account-scoped search, a single fetched course) where a code that looks
+   * unique is actually ambiguous across the caller's enrollments — poisoning
+   * the cache would silently resolve to the wrong course. Forward resolution
+   * always does its own exact-match walk (and only resolveCourseId itself
+   * caches a verified unique exact match).
    */
   seedCourseCodes(courses: Array<{ id: number; course_code?: string | null }>): void {
-    const codeOccurrences = new Map<string, number>();
-    for (const course of courses) {
-      const key = course.course_code?.toLowerCase();
-      if (!key) continue;
-      codeOccurrences.set(key, (codeOccurrences.get(key) ?? 0) + 1);
-    }
     for (const course of courses) {
       if (typeof course.id !== "number" || !course.course_code) continue;
       this.courseIdToCode.set(course.id, course.course_code);
-      const key = course.course_code.toLowerCase();
-      if (codeOccurrences.get(key) === 1) {
-        this.courseCodeCache.set(key, course.id);
-      }
     }
   }
 

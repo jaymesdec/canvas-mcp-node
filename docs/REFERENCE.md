@@ -42,6 +42,7 @@ Course identifiers resolve by **unique exact match** (case-insensitive, course c
 | `list_modules(course_identifier, include_items?)` | List modules; optionally inline items. |
 | `create_module(course_identifier, name, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Create a new Canvas module. Always **unpublished** at creation (Canvas's default). |
 | `update_module(course_identifier, module_id, name?, position?, prerequisite_module_ids?, require_sequential_progress?, unlock_at?)` | Update module settings. Only provided fields are sent; never touches publish state. |
+| `update_module_item(course_identifier, module_id, item_id, title?, position?, indent?, new_tab?)` | Update one module item. Only provided fields are sent; deliberately no `published` parameter (a module item's published flag controls student visibility). |
 | `delete_module(course_identifier, module_id)` | Permanently delete a module. Removes the module structure only — pages/assignments inside remain in the course. |
 | `add_module_item(course_identifier, module_id, type, title, content_id?, position?)` | Add Page/Assignment/Quiz/Discussion/ExternalUrl/SubHeader to a module. `content_id` routes to `page_url`/`external_url`/`content_id` based on type. |
 | `delete_module_item(course_identifier, module_id, item_id)` | Remove one item from a module. The underlying page/assignment/quiz remains in the course. |
@@ -64,7 +65,7 @@ Course identifiers resolve by **unique exact match** (case-insensitive, course c
 | `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Create a quiz. **`published: false` forced.** |
 | `create_quiz_question(course_identifier, quiz_id, question)` | Add a question. `question.question_type` is zod-validated. |
 | `list_quizzes(course_identifier)` | List classic quizzes (id, title, quiz_type, published, due_at, points_possible, question_count). New Quizzes live on a separate API and won't appear here. |
-| `get_quiz(course_identifier, quiz_id)` | Full quiz settings plus its questions (trimmed to id, position, name, type, points, text, answers). |
+| `get_quiz(course_identifier, quiz_id)` | Quiz settings (list fields plus description, shuffle_answers, allowed_attempts, time_limit, one_question_at_a_time, hide_results, scoring_policy, access_code, unlock_at, lock_at) plus its questions (trimmed to id, position, name, type, points, text, answers). |
 | `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Update quiz settings. Never touches published state. |
 | `update_quiz_question(course_identifier, quiz_id, question_id, question)` | Replace a question's content (same payload shape as `create_quiz_question`). Edits on quizzes with submissions create a new quiz version. |
 | `delete_quiz_question(course_identifier, quiz_id, question_id)` | Delete a question from a quiz. Same versioning caveat as `update_quiz_question`. |
@@ -101,6 +102,8 @@ Announcements are Canvas discussion topics under the hood, but they **cannot be 
 | `list_announcements(course_identifier)` | List announcements without the ±14-day window of the announcements API, so scheduled (`post_delayed`) items appear with their `delayed_post_at`. |
 | `create_announcement(course_identifier, title, message, delayed_post_at)` | Create a **scheduled** announcement. `delayed_post_at` is required: ISO-8601 with explicit offset or `Z`, at least the delay floor in the future. If Canvas reports it went live immediately anyway, the tool deletes it best-effort and errors loudly. |
 | `update_announcement(course_identifier, topic_id, title?, message?, delayed_post_at?)` | Update an announcement. A new `delayed_post_at` obeys the same offset + floor rules; null/empty is rejected (Canvas clears the delay on empty → immediate post). Edits after the post time are live edits. |
+| `delete_discussion(course_identifier, topic_id)` | Permanently delete a discussion topic and its entries. Refuses announcements (use `delete_announcement`). Bypasses the course-code cache. |
+| `delete_announcement(course_identifier, topic_id)` | Permanently delete an announcement — before the post time (cancels the schedule) or after (removes the live announcement). Refuses plain discussions (use `delete_discussion`). Bypasses the course-code cache. |
 
 ### Submissions (read)
 
@@ -172,7 +175,7 @@ For admin workflows that need to look beyond the token-owner's own enrollments:
 
 Both default `account_id` from the `CANVAS_ACCOUNT_ID` env var. By default the .mcpb installer hardcodes this to `self`, which works for admins. A clean "requires account-admin scope" error surfaces if the token is missing the permission.
 
-Non-admin teachers will see the structured error from these two tools and fall back to course-scoped tools (`list_courses`, `list_users` per course). The 45 course-scoped tools all work normally; the two account-scoped tools are the only ones that need admin.
+Non-admin teachers will see the structured error from these two tools and fall back to course-scoped tools (`list_courses`, `list_users` per course). The other 55 tools all work normally; the two account-scoped tools are the only ones that need admin.
 
 ---
 

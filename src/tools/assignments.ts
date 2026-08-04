@@ -5,7 +5,8 @@ import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
 import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
-import { displaySubmission } from "./submissions.js";
+import { anonymizeNonStaffCommentAuthors, displaySubmission } from "./submissions.js";
+import { buildStaffIdSet } from "./roster.js";
 
 const LIST_ASSIGNMENTS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -173,27 +174,68 @@ export function registerAssignmentTools(
           Array.isArray(args.include) &&
           args.include.some((token) => token === "submission" || token === "submission_history");
 
-        const finalAssignments = anonymous && hasSubmissionInclude
-          ? await Promise.all(
-              assignments.map(async (assignment) => {
+        let finalAssignments = assignments;
+        if (anonymous && hasSubmissionInclude) {
+          finalAssignments = await Promise.all(
+            assignments.map(async (assignment) => {
+              const copy: CanvasAssignment = { ...assignment };
+              if (assignment.submission) {
+                copy.submission = await anonymizer.anonymizeSubmission(
+                  courseId,
+                  assignment.submission as Record<string, unknown>,
+                );
+              }
+              if (Array.isArray(assignment.submission_history)) {
+                copy.submission_history = await Promise.all(
+                  assignment.submission_history.map((entry) =>
+                    anonymizer.anonymizeSubmission(courseId, entry),
+                  ),
+                );
+              }
+              return copy;
+            }),
+          );
+
+          // anonymizeSubmission covers the submitter but not comment authors —
+          // those arrive role-less, so they're classified against the staff
+          // roster (same pass list_submissions runs). Roster is fetched only
+          // when an embedded submission actually carries comments.
+          const submissionHasComments = (submission: unknown): boolean =>
+            !!submission &&
+            typeof submission === "object" &&
+            Array.isArray((submission as Record<string, unknown>).submission_comments) &&
+            ((submission as Record<string, unknown>).submission_comments as unknown[]).length > 0;
+          const hasAnyComments = finalAssignments.some(
+            (assignment) =>
+              submissionHasComments(assignment.submission) ||
+              (Array.isArray(assignment.submission_history) &&
+                assignment.submission_history.some(submissionHasComments)),
+          );
+          if (hasAnyComments) {
+            const staffIds = await buildStaffIdSet(canvas, courseId);
+            finalAssignments = await Promise.all(
+              finalAssignments.map(async (assignment) => {
                 const copy: CanvasAssignment = { ...assignment };
-                if (assignment.submission) {
-                  copy.submission = await anonymizer.anonymizeSubmission(
+                if (copy.submission) {
+                  copy.submission = await anonymizeNonStaffCommentAuthors(
+                    anonymizer,
                     courseId,
-                    assignment.submission as Record<string, unknown>,
+                    copy.submission as Record<string, unknown>,
+                    staffIds,
                   );
                 }
-                if (Array.isArray(assignment.submission_history)) {
+                if (Array.isArray(copy.submission_history)) {
                   copy.submission_history = await Promise.all(
-                    assignment.submission_history.map((entry) =>
-                      anonymizer.anonymizeSubmission(courseId, entry),
+                    copy.submission_history.map((entry) =>
+                      anonymizeNonStaffCommentAuthors(anonymizer, courseId, entry, staffIds),
                     ),
                   );
                 }
                 return copy;
               }),
-            )
-          : assignments;
+            );
+          }
+        }
         const trimmedAssignments = finalAssignments.map((assignment) =>
           displayAssignment(assignment, { includeDescription: args.include_description ?? false }),
         );

@@ -110,6 +110,36 @@ describe("buildNameScrubber", () => {
     expect(scrub("Mr. Smith posted the rubric")).toBe("Mr. Smith posted the rubric");
   });
 
+  describe("non-word boundary names (\\b would fail at accented/punctuation edges)", () => {
+    const accentScrub = buildNameScrubber([
+      { name: "René Dubois", pseudonym: "Student 5" },
+      { name: "Sammy Jr.", pseudonym: "Student 6" },
+      { name: "Émile Zola", pseudonym: "Student 7" },
+    ]);
+
+    it("scrubs a name ending in an accented letter mid-sentence", () => {
+      expect(accentScrub("I think René made a great point")).toBe(
+        "I think Student 5 made a great point",
+      );
+      expect(accentScrub("I agree with René Dubois here")).toBe("I agree with Student 5 here");
+    });
+
+    it("scrubs a name ending in a period", () => {
+      expect(accentScrub("Sammy Jr. wrote the intro")).toBe("Student 6 wrote the intro");
+      expect(accentScrub("Great job Sammy Jr.")).toBe("Great job Student 6");
+    });
+
+    it("scrubs accented-boundary names at string start and end", () => {
+      expect(accentScrub("Émile Zola said so")).toBe("Student 7 said so");
+      expect(accentScrub("That quote is from Émile")).toBe("That quote is from Student 7");
+      expect(accentScrub("René")).toBe("Student 5");
+    });
+
+    it("still respects word boundaries around the scrubbed token", () => {
+      expect(accentScrub("Renée is a different student")).toBe("Renée is a different student");
+    });
+  });
+
   it("returns empty text unchanged", () => {
     expect(scrub("")).toBe("");
   });

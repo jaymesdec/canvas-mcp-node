@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
+import {
+  buildMockCanvas,
+  buildToolHarness,
+  parseJsonResult,
+  type FakeResponse,
+  type ToolResponse,
+} from "../_helpers/mockCanvas.js";
 import { registerQuizTools } from "../../src/tools/quizzes.js";
 
 describe("registerQuizTools", () => {
@@ -204,7 +210,7 @@ describe("registerQuizTools", () => {
     expect(parsed.quizzes[1]?.question_count).toBeNull();
   });
 
-  it("get_quiz fires quiz + questions requests and merges the trimmed questions", async () => {
+  it("get_quiz fires quiz + questions requests, trims the quiz to the detail allowlist, and merges the trimmed questions", async () => {
     const { client, requests } = buildMockCanvas([
       {
         status: 200,
@@ -216,6 +222,11 @@ describe("registerQuizTools", () => {
           points_possible: 10,
           question_count: 2,
           shuffle_answers: true,
+          time_limit: 30,
+          access_code: "secret",
+          all_dates: [],
+          permissions: { read: true, update: true },
+          preview_url: "https://canvas.example.com/courses/60366/quizzes/999/preview",
         },
       },
       {
@@ -253,9 +264,43 @@ describe("registerQuizTools", () => {
       "/api/v1/courses/60366/quizzes/999",
       "/api/v1/courses/60366/quizzes/999/questions",
     ]);
-    const parsed = parseJsonResult<{ quiz: Record<string, unknown>; question_count: number; questions: Record<string, unknown>[] }>(result);
+    const parsed = parseJsonResult<{
+      quiz: Record<string, unknown>;
+      question_count: number;
+      question_pages: number;
+      questions_truncated: boolean;
+      questions: Record<string, unknown>[];
+    }>(result);
+    expect(Object.keys(parsed.quiz).sort()).toEqual(
+      [
+        "id",
+        "title",
+        "quiz_type",
+        "published",
+        "due_at",
+        "points_possible",
+        "question_count",
+        "html_url",
+        "description",
+        "shuffle_answers",
+        "allowed_attempts",
+        "time_limit",
+        "one_question_at_a_time",
+        "hide_results",
+        "scoring_policy",
+        "access_code",
+        "unlock_at",
+        "lock_at",
+      ].sort(),
+    );
     expect(parsed.quiz.shuffle_answers).toBe(true);
+    expect(parsed.quiz.time_limit).toBe(30);
+    expect(parsed.quiz.access_code).toBe("secret");
+    expect(parsed.quiz).not.toHaveProperty("permissions");
+    expect(JSON.stringify(parsed.quiz)).not.toContain("preview_url");
     expect(parsed.question_count).toBe(2);
+    expect(parsed.question_pages).toBe(1);
+    expect(parsed.questions_truncated).toBe(false);
     expect(parsed.questions).toHaveLength(2);
     const expectedQuestionKeys = ["id", "position", "question_name", "question_type", "points_possible", "question_text", "answers"].sort();
     for (const question of parsed.questions) {
@@ -263,6 +308,38 @@ describe("registerQuizTools", () => {
     }
     expect(parsed.questions[0]).not.toHaveProperty("assessment_question_id");
     expect(parsed.questions[0]?.answers).toHaveLength(1);
+  });
+
+  it("get_quiz propagates a truncated questions walk into questions_truncated/question_pages", async () => {
+    const responses: FakeResponse[] = [{ status: 200, data: { id: 999, title: "Big Quiz" } }];
+    // mockCanvas caps pagination at maxPages: 10 — every page advertises a next link.
+    for (let page = 1; page <= 10; page += 1) {
+      responses.push({
+        status: 200,
+        data: [
+          {
+            id: page,
+            quiz_id: 999,
+            position: page,
+            question_type: "essay_question",
+            question_text: `Q${page}`,
+            points_possible: 1,
+          },
+        ],
+        headers: {
+          link: `<https://canvas.example.com/api/v1/courses/60366/quizzes/999/questions?page=${page + 1}>; rel="next"`,
+        },
+      });
+    }
+    const { client } = buildMockCanvas(responses);
+    const harness = buildToolHarness();
+    registerQuizTools(harness.server as never, client);
+
+    const result = (await harness.call("get_quiz", { course_identifier: 60366, quiz_id: 999 })) as ToolResponse;
+    const parsed = parseJsonResult<{ question_count: number; question_pages: number; questions_truncated: boolean }>(result);
+    expect(parsed.questions_truncated).toBe(true);
+    expect(parsed.question_pages).toBe(10);
+    expect(parsed.question_count).toBe(10);
   });
 
   it("get_quiz with zero questions returns questions: [] and question_count 0", async () => {

@@ -203,6 +203,41 @@ describe("registerSubmissionTools", () => {
       expect(subs[0]?.rubric_assessment).toEqual({ _8027: { points: 4, comments: "Strong" } });
     });
 
+    it("renders the fixed placeholder for a comment with no author_id and no author object — call still succeeds", async () => {
+      const { client } = buildMockCanvas([
+        {
+          status: 200,
+          data: [
+            {
+              id: 1,
+              user_id: 1001,
+              user: { id: 1001, name: "Alice Real", role: "student" },
+              submission_comments: [
+                { id: 10, author_name: "Mystery Person", comment: "Who wrote this?" },
+              ],
+            },
+          ],
+        },
+        // staff roster fetch (buildStaffIdSet)
+        { status: 200, data: [{ id: 5000, name: "Mr. Smith" }] },
+      ]);
+      const harness = buildToolHarness();
+      registerSubmissionTools(harness.server as never, client, anonymizer);
+
+      const result = (await harness.call("list_submissions", {
+        course_identifier: 60366,
+        assignment_id: 999,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const subs = parseJsonResult(result).submissions as Array<{
+        submission_comments: Array<{ author_id: number | null; author_name: string; comment: string }>;
+      }>;
+      expect(subs[0]?.submission_comments[0]?.author_name).toBe("Unknown commenter");
+      expect(subs[0]?.submission_comments[0]?.author_id).toBeNull();
+      expect(subs[0]?.submission_comments[0]?.comment).toBe("Who wrote this?");
+      expect(JSON.stringify(parseJsonResult(result))).not.toContain("Mystery Person");
+    });
+
     it("maps missing comments/attachments to empty arrays in the trimmed shape", async () => {
       const { client } = buildMockCanvas([
         {

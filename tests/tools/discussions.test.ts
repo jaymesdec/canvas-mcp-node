@@ -61,11 +61,13 @@ function minutesFromNow(minutes: number): string {
 }
 
 describe("registerDiscussionTools", () => {
-  it("registers all seven discussion/announcement tools", () => {
+  it("registers all nine discussion/announcement tools", () => {
     const { harness } = buildHarness([]);
     expect([...harness.tools.keys()].sort()).toEqual([
       "create_announcement",
       "create_discussion",
+      "delete_announcement",
+      "delete_discussion",
       "get_discussion",
       "list_announcements",
       "list_discussions",
@@ -213,6 +215,20 @@ describe("registerDiscussionTools", () => {
       const warnings = payload.warnings as string[];
       expect(warnings.some((warning) => warning.includes("CANVAS_MCP_ALLOW_DEANONYMIZE"))).toBe(true);
       expect(JSON.stringify(payload)).not.toContain("Grace Park");
+    });
+
+    it("surfaces an entries-fetch 403 as a structured error naming the tool", async () => {
+      const { harness } = buildHarness([
+        TOPIC,
+        { status: 403, data: { errors: [{ message: "require_initial_post" }] } },
+      ]);
+      const result = (await harness.call("get_discussion", {
+        course_identifier: COURSE_ID,
+        topic_id: 42,
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/^get_discussion: /);
+      expect(result.content?.[0]?.text).toContain("403");
     });
 
     it("returns real names for anonymous=false when the env gate is set", async () => {
@@ -426,7 +442,7 @@ describe("registerDiscussionTools", () => {
       expect(requests).toHaveLength(0);
     });
 
-    it("creates with is_announcement: true and echoes the scheduled time in the summary", async () => {
+    it("creates with is_announcement: true, echoes the scheduled time in the summary and the message in the payload", async () => {
       const delayedPostAt = minutesFromNow(60);
       const { harness, requests } = buildHarness([
         {
@@ -434,6 +450,7 @@ describe("registerDiscussionTools", () => {
           data: {
             id: 70,
             title: "Field trip",
+            message: "<p>Details</p>",
             workflow_state: "post_delayed",
             delayed_post_at: delayedPostAt,
             published: true,
@@ -457,6 +474,8 @@ describe("registerDiscussionTools", () => {
       });
       expect(result.content?.[0]?.text).toContain(delayedPostAt);
       expect(result.content?.[0]?.text).toContain("goes live at");
+      const announcement = parseJsonResult(result).announcement as Record<string, unknown>;
+      expect(announcement.message).toBe("<p>Details</p>");
     });
 
     it("deletes the created topic and raises an error carrying its id when Canvas returns workflow_state active", async () => {
@@ -559,12 +578,18 @@ describe("registerDiscussionTools", () => {
       expect(requests).toHaveLength(0);
     });
 
-    it("moves the scheduled time via a partial PUT when the response stays post_delayed", async () => {
+    it("moves the scheduled time via a partial PUT when the response stays post_delayed, echoing the message", async () => {
       const delayedPostAt = minutesFromNow(90);
       const { harness, requests } = buildHarness([
         {
           status: 200,
-          data: { id: 80, title: "Trip", workflow_state: "post_delayed", delayed_post_at: delayedPostAt },
+          data: {
+            id: 80,
+            title: "Trip",
+            message: "<p>Trip details</p>",
+            workflow_state: "post_delayed",
+            delayed_post_at: delayedPostAt,
+          },
         },
       ]);
       const result = (await harness.call("update_announcement", {
@@ -578,6 +603,8 @@ describe("registerDiscussionTools", () => {
       expect(requests[0]?.url).toBe(`/api/v1/courses/${COURSE_ID}/discussion_topics/80`);
       expect(requests[0]?.data).toEqual({ delayed_post_at: delayedPostAt });
       expect(result.content?.[0]?.text).toContain(delayedPostAt);
+      const announcement = parseJsonResult(result).announcement as Record<string, unknown>;
+      expect(announcement.message).toBe("<p>Trip details</p>");
     });
 
     it("errors with the topic id and issues no DELETE when the response comes back active", async () => {
@@ -605,6 +632,79 @@ describe("registerDiscussionTools", () => {
       })) as ToolResponse;
       expect(result.isError).toBe(true);
       expect(requests).toHaveLength(0);
+    });
+  });
+
+  describe("delete_discussion", () => {
+    it("pre-GETs the topic then DELETEs it, naming it in the summary", async () => {
+      const { harness, requests } = buildHarness([
+        { status: 200, data: { id: 42, title: "Old debate", is_announcement: false, published: true } },
+        { status: 200, data: { id: 42, title: "Old debate" } },
+      ]);
+      const result = (await harness.call("delete_discussion", {
+        course_identifier: COURSE_ID,
+        topic_id: 42,
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("GET");
+      expect(requests[0]?.url).toBe(`/api/v1/courses/${COURSE_ID}/discussion_topics/42`);
+      expect(requests[1]?.method).toBe("DELETE");
+      expect(requests[1]?.url).toBe(`/api/v1/courses/${COURSE_ID}/discussion_topics/42`);
+      expect(result.content?.[0]?.text).toContain('Deleted discussion 42: "Old debate"');
+      expect(parseJsonResult(result).deleted).toBe(true);
+    });
+
+    it("refuses announcements with a pointer to delete_announcement and zero DELETEs", async () => {
+      const { harness, requests } = buildHarness([
+        { status: 200, data: { id: 43, title: "Actually an announcement", is_announcement: true } },
+      ]);
+      const result = (await harness.call("delete_discussion", {
+        course_identifier: COURSE_ID,
+        topic_id: 43,
+      })) as ToolResponse;
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("delete_announcement");
+      expect(requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
+    });
+  });
+
+  describe("delete_announcement", () => {
+    it("pre-GETs the topic then DELETEs it, noting deletion works before or after the post time", async () => {
+      const { harness, requests } = buildHarness([
+        {
+          status: 200,
+          data: { id: 90, title: "Scheduled trip", is_announcement: true, workflow_state: "post_delayed" },
+        },
+        { status: 200, data: { id: 90, title: "Scheduled trip" } },
+      ]);
+      const result = (await harness.call("delete_announcement", {
+        course_identifier: COURSE_ID,
+        topic_id: 90,
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("GET");
+      expect(requests[1]?.method).toBe("DELETE");
+      expect(requests[1]?.url).toBe(`/api/v1/courses/${COURSE_ID}/discussion_topics/90`);
+      expect(result.content?.[0]?.text).toContain("never went live");
+      expect(result.content?.[0]?.text).toContain("before or after the post time");
+      expect(parseJsonResult(result).deleted).toBe(true);
+    });
+
+    it("refuses plain discussions with a pointer to delete_discussion and zero DELETEs", async () => {
+      const { harness, requests } = buildHarness([
+        { status: 200, data: { id: 91, title: "Plain topic", is_announcement: false } },
+      ]);
+      const result = (await harness.call("delete_announcement", {
+        course_identifier: COURSE_ID,
+        topic_id: 91,
+      })) as ToolResponse;
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("delete_discussion");
+      expect(requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
     });
   });
 });

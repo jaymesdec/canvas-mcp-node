@@ -171,6 +171,90 @@ describe("registerAssignmentTools", () => {
     expect(assignments[0]?.submission.user.name).toBe("Student 1");
   });
 
+  it("list_assignments pseudonymizes role-less non-staff comment authors on embedded submissions", async () => {
+    const { client, requests } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          {
+            id: 1,
+            name: "HW1",
+            submission: {
+              id: 99,
+              user_id: 1001,
+              user: { id: 1001, name: "Alice Real", role: "student" },
+              submission_comments: [
+                // Role-less UserDisplay author (production shape) — NOT in the staff set
+                {
+                  id: 10,
+                  author_id: 2002,
+                  author_name: "Charlie Peer",
+                  author: { id: 2002, display_name: "Charlie Peer" },
+                  comment: "Peer feedback",
+                },
+                {
+                  id: 11,
+                  author_id: 5000,
+                  author_name: "Mr. Smith",
+                  author: { id: 5000, display_name: "Mr. Smith" },
+                  comment: "Teacher feedback",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      // staff roster fetch (buildStaffIdSet) — only issued because comments exist
+      { status: 200, data: [{ id: 5000, name: "Mr. Smith" }] },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include: ["submission"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests[1]?.url).toBe("/api/v1/courses/60366/users");
+    expect(requests[1]?.params).toMatchObject({ "enrollment_type[]": ["teacher", "ta", "designer"] });
+
+    const payload = parseJsonResult(result);
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain("Charlie Peer");
+    expect(serialized).toContain("Mr. Smith");
+    const assignments = payload.assignments as Array<{
+      submission: { submission_comments: Array<{ author_id: number; author_name: string }> };
+    }>;
+    const comments = assignments[0]!.submission.submission_comments;
+    expect(comments[0]?.author_id).toBe(2002);
+    expect(comments[0]?.author_name).toMatch(/^Student \d+$/);
+    expect(comments[1]?.author_name).toBe("Mr. Smith");
+  });
+
+  it("list_assignments skips the staff-roster fetch when no embedded submission has comments", async () => {
+    const { client, requests } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          {
+            id: 1,
+            name: "HW1",
+            submission: { id: 99, user_id: 1001, user: { id: 1001, name: "Alice Real", role: "student" } },
+          },
+        ],
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include: ["submission"],
+    })) as ToolResponse;
+    expect(result.isError).toBeFalsy();
+    expect(requests).toHaveLength(1);
+  });
+
   it("list_assignments anonymous=false without operator env opt-in: silently anonymizes + warns", async () => {
     const previousEnv = process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
     delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;

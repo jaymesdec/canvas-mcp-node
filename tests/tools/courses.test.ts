@@ -1,44 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
-import { jsonResult } from "../../src/tools/toolHelpers.js";
 import { registerCourseTools } from "../../src/tools/courses.js";
-
-describe("jsonResult", () => {
-  it("emits summary + compact JSON as the only representation", () => {
-    const result = jsonResult({ a: 1, nested: { b: 2 } }, { summary: "S" });
-    expect(result.content).toEqual([{ type: "text", text: 'S\n\n{"a":1,"nested":{"b":2}}' }]);
-    expect(Object.keys(result)).toEqual(["content"]);
-  });
-
-  it("emits compact JSON alone when no summary is given", () => {
-    const result = jsonResult({ a: 1 });
-    expect(result.content?.[0]?.text).toBe('{"a":1}');
-    expect(Object.keys(result)).toEqual(["content"]);
-  });
-
-  it("stringifies non-object payloads without wrapper objects", () => {
-    expect(jsonResult([1, 2]).content?.[0]?.text).toBe("[1,2]");
-    expect(jsonResult("plain").content?.[0]?.text).toBe('"plain"');
-  });
-});
-
-describe("parseJsonResult", () => {
-  it("parses the payload after the summary line", () => {
-    const parsed = parseJsonResult(jsonResult({ count: 2 }, { summary: "2 course(s) found." }));
-    expect(parsed).toEqual({ count: 2 });
-  });
-
-  it("parses a summary-less payload", () => {
-    expect(parseJsonResult(jsonResult([1, 2]))).toEqual([1, 2]);
-  });
-
-  it("throws on error results instead of parsing them", () => {
-    expect(() =>
-      parseJsonResult({ content: [{ type: "text", text: "boom" }], isError: true }),
-    ).toThrow(/error result/);
-  });
-});
 
 describe("registerCourseTools", () => {
   it("registers list_courses, list_account_courses, and get_course_details", () => {
@@ -88,8 +51,8 @@ describe("registerCourseTools", () => {
       expect(requests[0]?.params).toMatchObject({ enrollment_state: "active" });
     });
 
-    it("seeds the course-code caches so a later code resolution needs no extra fetch", async () => {
-      const { client, requests } = buildMockCanvas([
+    it("seeds the id→code display map; forward resolution still does its own exact-match walk", async () => {
+      const { client, requests, enqueue } = buildMockCanvas([
         {
           status: 200,
           data: [
@@ -108,9 +71,16 @@ describe("registerCourseTools", () => {
       expect(client.getCachedCourseCode(60367)).toBe("DSGN_9_120251");
       expect(client.getCachedCourseCode(60368)).toBe("CMP_10_120251");
 
-      // Unique code resolves from cache with no additional request.
+      // The forward code→id cache is never seeded — resolution re-walks enrollments.
+      enqueue({
+        status: 200,
+        data: [
+          { id: 60368, name: "Computing 10", course_code: "CMP_10_120251", workflow_state: "available" },
+        ],
+      });
       await expect(client.resolveCourseId("CMP_10_120251")).resolves.toBe(60368);
-      expect(requests).toHaveLength(1);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.url).toBe("/api/v1/courses");
     });
 
     it("threads enrollment_state and include[] through to Canvas", async () => {

@@ -40,7 +40,7 @@ src/
 │   ├── toolHelpers.ts      # jsonResult/textResult/errorResult/safeHandler/pickFields
 │   ├── roster.ts           # course roster fetch + staff-id classification (shared FERPA helper)
 │   ├── courses.ts          # list_courses, get_course_details, list_account_courses
-│   ├── modules.ts          # list_modules, create_module, update_module, delete_module, add_module_item, delete_module_item
+│   ├── modules.ts          # list_modules, create_module, update_module, update_module_item, delete_module, add_module_item, delete_module_item
 │   ├── assignments.ts      # list_assignments, create_assignment, update_assignment, get_assignment_details, get_assignment_rubric_details
 │   ├── rubrics.ts          # list_all_rubrics, get_rubric_details, create_rubric, create_rubric_association
 │   ├── users.ts            # list_users, list_user_enrollments, list_account_users
@@ -48,7 +48,7 @@ src/
 │   ├── quizzes.ts          # create_quiz, create_quiz_question, list_quizzes, get_quiz, update_quiz, update_quiz_question, delete_quiz_question
 │   ├── submissions.ts      # list_submissions, get_submission_rubric_assessment, download_submission_attachment
 │   ├── discussionAnonymizer.ts # entry-author pseudonymization + roster-name body scrub (best-effort)
-│   ├── discussions.ts      # list_discussions, get_discussion, create_discussion, update_discussion, list_announcements, create_announcement, update_announcement
+│   ├── discussions.ts      # list_discussions, get_discussion, create_discussion, update_discussion, delete_discussion, list_announcements, create_announcement, update_announcement, delete_announcement
 │   ├── grading.ts          # grade_submission, grade_with_rubric, grade_submission_with_rubric, bulk_grade_submissions
 │   ├── anonymization.ts    # create_student_anonymization_map, get_anonymization_status
 │   ├── competencies.ts     # list_competencies (school-config-driven)
