@@ -107,29 +107,63 @@ export const SchoolConfigSchema = z.object({
         .describe(
           "ISO date (YYYY-MM-DD) of the first day of classes for the school year. Lets skills compute the academic week number for a given due date. Week 1 = yearStart through yearStart+6 days.",
         ),
+      weeks: z
+        .array(
+          z.object({
+            week: z.number().int().min(0),
+            start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          }),
+        )
+        .optional()
+        .describe(
+          "Official week-number table from the school's published calendar: each entry maps a week number to the Monday (YYYY-MM-DD) it starts. A date belongs to a week when start <= date < start+7 days; dates falling in gaps between entries are school breaks. When present this table takes precedence over yearStart math. Regenerate yearly with scripts/import-week-calendar.mjs from the school's iCal feed.",
+        ),
     })
     .optional(),
 });
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
 /**
- * Compute the academic week number (1..weeksPerYear) a given date falls in,
- * using yearStart from the school config's academic calendar. Returns null if
- * yearStart isn't configured. Clamps to [1, weeksPerYear] when configured.
+ * Compute the academic week number a given date falls in.
  *
- * Breaks (winter, spring) are NOT skipped — Week 14 is calendar-week 14 since
- * yearStart, regardless of whether classes meet that week. Teachers read the
- * week number as a sequence position; the title format isn't trying to
- * communicate "this is the 14th week of instruction" precisely.
+ * When the calendar has a `weeks` table, that is the official published
+ * calendar with breaks already skipped (week numbers may start at 0 and jump
+ * over vacation weeks) — the date is looked up against the table's 7-day
+ * windows, and dates in gaps (school breaks) or outside the year return null.
+ *
+ * The weeks-since-yearStart math is only an approximation for schools without
+ * a table: breaks are NOT skipped, so by spring it can drift several weeks
+ * from the school's own numbering. It clamps to [1, weeksPerYear] and returns
+ * null only when yearStart isn't configured.
  */
 export function computeAcademicWeek(
   date: Date,
   calendar: NonNullable<SchoolConfig["academicCalendar"]> | undefined,
 ): number | null {
-  if (!calendar?.yearStart) return null;
+  if (!calendar) return null;
+
+  if (calendar.weeks && calendar.weeks.length > 0) {
+    const dateMs = date.getTime();
+    let matchedWeek: { week: number; startMs: number } | null = null;
+    for (const entry of calendar.weeks) {
+      const startMs = Date.parse(`${entry.start}T00:00:00Z`);
+      if (Number.isNaN(startMs)) continue;
+      if (startMs <= dateMs && (matchedWeek === null || startMs > matchedWeek.startMs)) {
+        matchedWeek = { week: entry.week, startMs };
+      }
+    }
+    if (matchedWeek !== null && dateMs < matchedWeek.startMs + WEEK_MS) {
+      return matchedWeek.week;
+    }
+    return null;
+  }
+
+  if (!calendar.yearStart) return null;
   const start = new Date(`${calendar.yearStart}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
   const diffMs = date.getTime() - start.getTime();
-  const week = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
+  const week = Math.floor(diffMs / WEEK_MS) + 1;
   const max = calendar.weeksPerYear ?? Infinity;
   return Math.max(1, Math.min(week, max));
 }

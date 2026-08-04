@@ -31,6 +31,17 @@ export function registerSchoolInfoTools(
         const calendar = schoolConfig.academicCalendar;
         const today = new Date();
         const currentWeek = calendar ? computeAcademicWeek(today, calendar) : null;
+        const hasWeekTable = (calendar?.weeks?.length ?? 0) > 0;
+
+        let onBreak = false;
+        if (hasWeekTable && currentWeek === null) {
+          const weekStartTimes = calendar!.weeks!.map((entry) =>
+            Date.parse(`${entry.start}T00:00:00Z`),
+          );
+          const yearBeginsMs = Math.min(...weekStartTimes);
+          const yearEndsMs = Math.max(...weekStartTimes) + 7 * 24 * 60 * 60 * 1000;
+          onBreak = today.getTime() >= yearBeginsMs && today.getTime() < yearEndsMs;
+        }
 
         const academicCalendar = calendar
           ? {
@@ -39,6 +50,8 @@ export function registerSchoolInfoTools(
               year_start: calendar.yearStart ?? null,
               term_names: calendar.termNames ?? null,
               current_week: currentWeek,
+              week_source: hasWeekTable ? "calendar_table" : "computed",
+              ...(onBreak ? { on_break: true } : {}),
             }
           : null;
 
@@ -64,15 +77,22 @@ export function registerSchoolInfoTools(
             page_template_names: pageTemplateNames,
             usage_hint:
               "Use academic_calendar.class_period_minutes as the default Stage-3 lesson duration. " +
-              "Use academic_calendar.current_week or compute the week of a future due date as " +
-              "Math.floor((dueDate - yearStart) / 7days) + 1 (clamped 1..weeks_per_year). " +
+              "Use academic_calendar.current_week for today's official week number (week_source " +
+              "'calendar_table' means it comes from the school's published calendar with breaks " +
+              "skipped; 'computed' means weeks-since-yearStart approximation). " +
               "Call list_page_templates for per-template metadata including titleFormat.",
           },
           {
             summary:
               `${schoolConfig.schoolName ?? "School"} — ${pageTemplateNames.length} template(s), ` +
               `period ${calendar?.classPeriodMinutes ?? "?"} min, ` +
-              `${currentWeek != null ? `week ${currentWeek}` : "no calendar configured"}.`,
+              `${
+                currentWeek != null
+                  ? `week ${currentWeek}`
+                  : onBreak
+                    ? "school is on break this week"
+                    : "no calendar configured"
+              }.`,
           },
         );
       });

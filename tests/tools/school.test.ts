@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerSchoolInfoTools } from "../../src/tools/school.js";
@@ -32,6 +32,20 @@ const franklinLike: SchoolConfig = {
 
 const minimalConfig: SchoolConfig = {
   schoolName: "Bare Minimum School",
+};
+
+const weekTableConfig: SchoolConfig = {
+  schoolName: "Table School",
+  academicCalendar: {
+    weeksPerYear: 36,
+    yearStart: "2026-08-24",
+    weeks: [
+      { week: 0, start: "2026-08-24" },
+      { week: 1, start: "2026-08-31" },
+      // gap: 2026-09-07 through 2026-09-13 is a break week
+      { week: 2, start: "2026-09-14" },
+    ],
+  },
 };
 
 describe("registerSchoolInfoTools", () => {
@@ -111,6 +125,61 @@ describe("registerSchoolInfoTools", () => {
       academic_calendar: { current_week: number | null };
     }).academic_calendar;
     expect(calendar.current_week).toBeNull();
+  });
+
+  describe("calendar-table week reporting", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("reports week_source 'computed' when no weeks table is configured", async () => {
+      const harness = buildToolHarness();
+      registerSchoolInfoTools(harness.server as never, franklinLike);
+      const result = (await harness.call("get_school_info")) as ToolResponse;
+      const calendar = (parseJsonResult(result) as { academic_calendar: Record<string, unknown> })
+        .academic_calendar;
+      expect(calendar.week_source).toBe("computed");
+      expect(calendar.on_break).toBeUndefined();
+    });
+
+    it("reports the table week and week_source 'calendar_table' on a school day", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-02T12:00:00Z"));
+      const harness = buildToolHarness();
+      registerSchoolInfoTools(harness.server as never, weekTableConfig);
+      const result = (await harness.call("get_school_info")) as ToolResponse;
+      const calendar = (parseJsonResult(result) as { academic_calendar: Record<string, unknown> })
+        .academic_calendar;
+      expect(calendar.current_week).toBe(1);
+      expect(calendar.week_source).toBe("calendar_table");
+      expect(calendar.on_break).toBeUndefined();
+    });
+
+    it("reports on_break during a gap between table weeks", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-09T12:00:00Z"));
+      const harness = buildToolHarness();
+      registerSchoolInfoTools(harness.server as never, weekTableConfig);
+      const result = (await harness.call("get_school_info")) as ToolResponse;
+      const calendar = (parseJsonResult(result) as { academic_calendar: Record<string, unknown> })
+        .academic_calendar;
+      expect(calendar.current_week).toBeNull();
+      expect(calendar.week_source).toBe("calendar_table");
+      expect(calendar.on_break).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/school is on break this week/);
+    });
+
+    it("does not report on_break outside the school year", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));
+      const harness = buildToolHarness();
+      registerSchoolInfoTools(harness.server as never, weekTableConfig);
+      const result = (await harness.call("get_school_info")) as ToolResponse;
+      const calendar = (parseJsonResult(result) as { academic_calendar: Record<string, unknown> })
+        .academic_calendar;
+      expect(calendar.current_week).toBeNull();
+      expect(calendar.on_break).toBeUndefined();
+    });
   });
 
   it("handles a minimal config (just schoolName, no calendar, no templates)", async () => {

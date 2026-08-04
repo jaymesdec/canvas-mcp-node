@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { computeAcademicWeek, loadSchoolConfig } from "../src/schoolConfig.js";
+import { computeAcademicWeek, loadSchoolConfig, type SchoolConfig } from "../src/schoolConfig.js";
 
 let tmpRoot: string;
 let warnings: string[];
@@ -163,6 +163,19 @@ describe("loadSchoolConfig", () => {
     expect(assessment?.html).toContain('{{slot:structure_and_grading}}');
   });
 
+  it("ships the 2026-27 week table in configs/franklin.json", async () => {
+    const result = await loadSchoolConfig({
+      configPath: path.resolve("configs/franklin.json"),
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toEqual([]);
+    const calendar = result?.academicCalendar;
+    expect(calendar?.weeksPerYear).toBe(36);
+    expect(calendar?.weeks).toHaveLength(37);
+    expect(calendar?.weeks?.[0]).toEqual({ week: 0, start: "2026-08-24" });
+    expect(calendar?.weeks?.[36]).toEqual({ week: 36, start: "2027-06-07" });
+  });
+
   it("validates the shipped configs/example.json", async () => {
     const examplePath = path.resolve("configs/example.json");
     const result = await loadSchoolConfig({
@@ -237,5 +250,64 @@ describe("computeAcademicWeek", () => {
 
   it("returns null when calendar is undefined", () => {
     expect(computeAcademicWeek(new Date(), undefined)).toBeNull();
+  });
+
+  it("falls back to yearStart math when the weeks table is empty", () => {
+    expect(
+      computeAcademicWeek(new Date("2026-11-02T00:00:00Z"), {
+        weeksPerYear: 35,
+        yearStart: "2026-08-24",
+        weeks: [],
+      }),
+    ).toBe(11);
+  });
+});
+
+describe("computeAcademicWeek with the franklin week table", () => {
+  let franklinCalendar: NonNullable<SchoolConfig["academicCalendar"]>;
+
+  beforeAll(async () => {
+    const franklin = await loadSchoolConfig({
+      configPath: path.resolve("configs/franklin.json"),
+    });
+    franklinCalendar = franklin!.academicCalendar!;
+  });
+
+  it("returns the table week for a mid-week date", () => {
+    expect(computeAcademicWeek(new Date("2027-04-15T12:00:00Z"), franklinCalendar)).toBe(28);
+  });
+
+  it("returns the table week on the Monday the week starts", () => {
+    expect(computeAcademicWeek(new Date("2027-04-12T00:00:00Z"), franklinCalendar)).toBe(28);
+  });
+
+  it("returns the table week on the Saturday within the week", () => {
+    expect(computeAcademicWeek(new Date("2027-04-17T23:00:00Z"), franklinCalendar)).toBe(28);
+  });
+
+  it("returns 0 for a date in Week 0", () => {
+    expect(computeAcademicWeek(new Date("2026-08-26T12:00:00Z"), franklinCalendar)).toBe(0);
+  });
+
+  it("returns null during the Thanksgiving break gap", () => {
+    expect(computeAcademicWeek(new Date("2026-11-25T12:00:00Z"), franklinCalendar)).toBeNull();
+  });
+
+  it("returns null during the spring break gap", () => {
+    expect(computeAcademicWeek(new Date("2027-03-20T12:00:00Z"), franklinCalendar)).toBeNull();
+  });
+
+  it("returns null before Week 0 starts", () => {
+    expect(computeAcademicWeek(new Date("2026-08-20T12:00:00Z"), franklinCalendar)).toBeNull();
+  });
+
+  it("returns null after Week 36 ends", () => {
+    expect(computeAcademicWeek(new Date("2027-06-20T12:00:00Z"), franklinCalendar)).toBeNull();
+  });
+
+  it("does not clamp to the yearStart math when the table misses", () => {
+    // The naive math would return a week number for 2027-06-20; the table must win.
+    expect(franklinCalendar.yearStart).toBe("2026-08-24");
+    expect(computeAcademicWeek(new Date("2027-06-20T12:00:00Z"), franklinCalendar)).toBeNull();
   });
 });

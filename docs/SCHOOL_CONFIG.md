@@ -90,14 +90,33 @@ Use however many competencies your school has — 3, 6, 9, 12, doesn't matter.
 ```jsonc
 "academicCalendar": {
   "weeksPerYear": 36,
-  "termNames": ["Fall", "Spring"]
+  "termNames": ["Fall", "Spring"],
+  "yearStart": "2026-08-31",
+  "weeks": [
+    { "week": 1, "start": "2026-08-31" },
+    { "week": 2, "start": "2026-09-07" },
+    { "week": 3, "start": "2026-09-14" }
+    // … one entry per official school week
+  ]
 }
 ```
 
 - `weeksPerYear` — informs default module sizing in the `plan-course` and `plan-module` skills.
 - `termNames` — currently informational only; future skills may use it for term-aware planning.
+- `yearStart` — first day of classes (YYYY-MM-DD). Used as a fallback to approximate the current week (`weeks-since-yearStart`) when no `weeks` table is present.
+- `weeks` — the **official week-number table** from your school's published calendar: each entry maps a week number to the Monday it starts. A date belongs to a week when `start <= date < start + 7 days`; dates falling in gaps between entries count as school breaks (`get_school_info` reports `current_week: null` and `on_break: true`). When present, this table takes precedence over the `yearStart` math — which matters for schools whose week numbering skips vacations (the naive math drifts several weeks off by spring) or starts at Week 0.
 
-Both fields are optional. Skip if your school doesn't have a clean week numbering, or if your terms don't fit a neat list.
+All fields are optional. Skip if your school doesn't have a clean week numbering, or if your terms don't fit a neat list.
+
+**Importing the week table from an iCal feed.** If your school publishes a calendar feed with events named exactly `Week 0`, `Week 1`, … you can regenerate the table each year instead of typing it by hand:
+
+```bash
+node scripts/import-week-calendar.mjs <ics-file-or-url> [config-path]
+# e.g.
+node scripts/import-week-calendar.mjs https://school.example/calendar.ics configs/franklin.json
+```
+
+The script extracts the `Week N` events, maps each `DTSTART` to a `{ week, start }` entry, and rewrites `academicCalendar.weeks` in the config file in place (all other fields kept), printing a summary table.
 
 #### `pageTemplates` — your institutional HTML for Canvas pages
 

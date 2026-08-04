@@ -25,7 +25,12 @@
     "weeksPerYear": 36,
     "termNames": ["Fall", "Spring"],
     "classPeriodMinutes": 50,
-    "yearStart": "2026-08-31"
+    "yearStart": "2026-08-31",
+    "weeks": [
+      { "week": 1, "start": "2026-08-31" },
+      { "week": 2, "start": "2026-09-07" },
+      { "week": 3, "start": "2026-09-14" }
+    ]
   },
   "pageTemplates": {
     "default": {
