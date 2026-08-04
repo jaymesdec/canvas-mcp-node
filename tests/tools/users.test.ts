@@ -3,15 +3,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerUserTools } from "../../src/tools/users.js";
 import { Anonymizer } from "../../src/anonymizer.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 let anonRoot: string;
 let anonymizer: Anonymizer;
@@ -59,10 +53,10 @@ describe("registerUserTools", () => {
         "enrollment_type[]": ["student"],
         "include[]": ["enrollments", "email"],
       });
-      const users = result.structuredContent?.users as Array<{ name: string; email: string }>;
+      const users = parseJsonResult(result).users as Array<{ name: string; email: string }>;
       expect(users.map((user) => user.name)).toEqual(["Student 1", "Student 2"]);
       expect(users[0]?.email).toBe("student1@anonymized.local");
-      expect(result.structuredContent?.anonymized).toBe(true);
+      expect(parseJsonResult(result).anonymized).toBe(true);
     });
 
     it("with anonymous=false BUT no operator env opt-in: silently anonymizes and surfaces a warning", async () => {
@@ -83,10 +77,10 @@ describe("registerUserTools", () => {
           course_identifier: 60366,
           anonymous: false,
         })) as ToolResponse;
-        expect(result.structuredContent?.anonymized).toBe(true);
-        const users = result.structuredContent?.users as Array<{ name: string }>;
+        expect(parseJsonResult(result).anonymized).toBe(true);
+        const users = parseJsonResult(result).users as Array<{ name: string }>;
         expect(users[0]?.name).toBe("Student 1");
-        const warnings = result.structuredContent?.warnings as string[];
+        const warnings = parseJsonResult(result).warnings as string[];
         expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
       } finally {
         if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
@@ -112,9 +106,9 @@ describe("registerUserTools", () => {
           course_identifier: 60366,
           anonymous: false,
         })) as ToolResponse;
-        const users = result.structuredContent?.users as Array<{ name: string }>;
+        const users = parseJsonResult(result).users as Array<{ name: string }>;
         expect(users[0]?.name).toBe("Alice Real");
-        expect(result.structuredContent?.warnings).toBeUndefined();
+        expect(parseJsonResult(result).warnings).toBeUndefined();
       } finally {
         if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
         else process.env.CANVAS_MCP_ALLOW_DEANONYMIZE = previousEnv;
@@ -137,7 +131,7 @@ describe("registerUserTools", () => {
         course_identifier: 60366,
         enrollment_type: ["teacher", "student"],
       })) as ToolResponse;
-      const users = result.structuredContent?.users as Array<{ id: number; name: string }>;
+      const users = parseJsonResult(result).users as Array<{ id: number; name: string }>;
       expect(users.find((user) => user.id === 5000)?.name).toBe("Mr. Smith");
       expect(users.find((user) => user.id === 1001)?.name).toBe("Student 1");
     });
@@ -160,7 +154,7 @@ describe("registerUserTools", () => {
       expect(result.isError).toBeFalsy();
       expect(requests[0]?.url).toBe("/api/v1/users/1001/enrollments");
       expect(requests[0]?.params).toMatchObject({ "state[]": ["active"] });
-      const enrollments = result.structuredContent?.enrollments as Array<{ course_id: number }>;
+      const enrollments = parseJsonResult(result).enrollments as Array<{ course_id: number }>;
       expect(enrollments).toHaveLength(2);
     });
   });
@@ -191,7 +185,7 @@ describe("registerUserTools", () => {
       const harness = buildToolHarness();
       registerUserTools(harness.server as never, client, anonymizer);
       const result = (await harness.call("list_account_users", { account_id: 1 })) as ToolResponse;
-      const users = result.structuredContent?.users as Array<{ id: number; name: string }>;
+      const users = parseJsonResult(result).users as Array<{ id: number; name: string }>;
       expect(users.find((user) => user.id === 5000)?.name).toBe("Teacher Person");
       // Student and unknown both get anonymized (account-scope id 0).
       expect(users.find((user) => user.id === 1001)?.name).toMatch(/^Student \d+$/);
@@ -217,7 +211,7 @@ describe("registerUserTools", () => {
         const result = (await harness.call("list_account_users", { search_term: "Smith" })) as ToolResponse;
         expect(result.isError).toBeFalsy();
         expect(requests[0]?.url).toBe("/api/v1/accounts/self/users");
-        expect(result.structuredContent?.account_id).toBe("self");
+        expect(parseJsonResult(result).account_id).toBe("self");
       } finally {
         if (previousEnv === undefined) delete process.env.CANVAS_ACCOUNT_ID;
         else process.env.CANVAS_ACCOUNT_ID = previousEnv;

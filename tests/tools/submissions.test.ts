@@ -3,15 +3,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { Anonymizer } from "../../src/anonymizer.js";
 import { registerSubmissionTools } from "../../src/tools/submissions.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 let anonRoot: string;
 let workDir: string;
@@ -75,8 +69,8 @@ describe("registerSubmissionTools", () => {
       expect(requests[0]?.params).toMatchObject({
         "include[]": ["user", "rubric_assessment", "submission_comments"],
       });
-      expect(result.structuredContent?.anonymized).toBe(true);
-      const subs = result.structuredContent?.submissions as Array<{
+      expect(parseJsonResult(result).anonymized).toBe(true);
+      const subs = parseJsonResult(result).submissions as Array<{
         user: { name: string };
         submission_comments: Array<{ author: { name: string } }>;
       }>;
@@ -106,10 +100,10 @@ describe("registerSubmissionTools", () => {
         assignment_id: 999,
         anonymous: false,
       })) as ToolResponse;
-      expect(result.structuredContent?.anonymized).toBe(true);
-      const warnings = result.structuredContent?.warnings as string[];
+      expect(parseJsonResult(result).anonymized).toBe(true);
+      const warnings = parseJsonResult(result).warnings as string[];
       expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
-      const subs = result.structuredContent?.submissions as Array<{ user: { name: string } }>;
+      const subs = parseJsonResult(result).submissions as Array<{ user: { name: string } }>;
       expect(subs[0]?.user.name).toBe("Student 1");
     });
 
@@ -134,7 +128,7 @@ describe("registerSubmissionTools", () => {
         assignment_id: 999,
         anonymous: false,
       })) as ToolResponse;
-      const subs = result.structuredContent?.submissions as Array<{ user: { name: string } }>;
+      const subs = parseJsonResult(result).submissions as Array<{ user: { name: string } }>;
       expect(subs[0]?.user.name).toBe("Alice Real");
     });
   });
@@ -175,7 +169,7 @@ describe("registerSubmissionTools", () => {
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
       expect(requests).toHaveLength(2);
-      const joined = result.structuredContent?.rubric_assessment as Array<{
+      const joined = parseJsonResult(result).rubric_assessment as Array<{
         criterion_id: string;
         description: string;
         points: number;
@@ -199,8 +193,8 @@ describe("registerSubmissionTools", () => {
         assignment_id: 999,
         user_id: 1001,
       })) as ToolResponse;
-      expect(result.structuredContent?.rubric_assessment).toBeNull();
-      expect(result.structuredContent?.message).toMatch(/No rubric assessment/);
+      expect(parseJsonResult(result).rubric_assessment).toBeNull();
+      expect(parseJsonResult(result).message).toMatch(/No rubric assessment/);
     });
   });
 
@@ -237,7 +231,7 @@ describe("registerSubmissionTools", () => {
         user_id: 1001,
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      const files = result.structuredContent?.files as Array<{ filename: string; path: string; size: number }>;
+      const files = parseJsonResult(result).files as Array<{ filename: string; path: string; size: number }>;
       expect(files).toHaveLength(1);
       expect(files[0]?.filename).toBe("1001-report.pdf");
       // File should actually exist on disk
@@ -259,8 +253,8 @@ describe("registerSubmissionTools", () => {
         assignment_id: 999,
         user_id: 1001,
       })) as ToolResponse;
-      expect(result.structuredContent?.files).toEqual([]);
-      expect(result.structuredContent?.message).toMatch(/No attachments/);
+      expect(parseJsonResult(result).files).toEqual([]);
+      expect(parseJsonResult(result).message).toMatch(/No attachments/);
     });
 
     it("respects an explicit attachment_id filter", async () => {
@@ -287,7 +281,7 @@ describe("registerSubmissionTools", () => {
         user_id: 1001,
         attachment_id: 200,
       })) as ToolResponse;
-      const files = result.structuredContent?.files as Array<{ filename: string }>;
+      const files = parseJsonResult(result).files as Array<{ filename: string }>;
       expect(files).toHaveLength(1);
       expect(files[0]?.filename).toBe("1001-b.txt");
     });
@@ -314,7 +308,7 @@ describe("registerSubmissionTools", () => {
         user_id: 1001,
         target_dir: customDir,
       })) as ToolResponse;
-      const files = result.structuredContent?.files as Array<{ path: string }>;
+      const files = parseJsonResult(result).files as Array<{ path: string }>;
       expect(files[0]?.path.startsWith(customDir)).toBe(true);
     });
 

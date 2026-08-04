@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerQuizTools } from "../../src/tools/quizzes.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 describe("registerQuizTools", () => {
   it("registers create_quiz and create_quiz_question", () => {

@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerPageTools } from "../../src/tools/pages.js";
 import type { SchoolConfig } from "../../src/schoolConfig.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 const templatedConfig: SchoolConfig = {
   schoolName: "Test School",
@@ -88,7 +82,7 @@ describe("registerPageTools", () => {
       expect(result.isError).toBeFalsy();
       expect(requests[0]?.method).toBe("DELETE");
       expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages/the-water-cycle-3");
-      const deleted = result.structuredContent?.deleted as Record<string, unknown>;
+      const deleted = parseJsonResult(result).deleted as Record<string, unknown>;
       // Body stripped to save tokens echoing back wrapped HTML.
       expect(deleted).not.toHaveProperty("body");
       expect(deleted.body_omitted).toBe(true);
@@ -125,7 +119,7 @@ describe("registerPageTools", () => {
     const result = (await harness.call("list_pages", { course_identifier: 60366 })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages");
-    const pages = result.structuredContent?.wiki_pages as Array<{ url: string; published: boolean }>;
+    const pages = parseJsonResult(result).wiki_pages as Array<{ url: string; published: boolean }>;
     expect(pages.map((page) => page.url)).toEqual(["intro", "syllabus"]);
     expect(pages[1]?.published).toBe(false);
   });
@@ -143,7 +137,7 @@ describe("registerPageTools", () => {
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/pages/weird%20slug");
-    expect(result.structuredContent?.body).toBe("<p>body</p>");
+    expect(parseJsonResult(result).body).toBe("<p>body</p>");
   });
 
   it("create_page forces published: false", async () => {
@@ -232,10 +226,10 @@ describe("registerPageTools", () => {
       expect(result.isError).toBeFalsy();
       const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toBe('<div class="wrap"><h1>Lesson 1</h1><p>Hello</p></div>');
-      expect(result.structuredContent?.template_applied).toBe("default");
+      expect(parseJsonResult(result).template_applied).toBe("default");
       // Response should NOT echo the wrapped body back (token-saving).
-      expect(result.structuredContent).not.toHaveProperty("body");
-      expect(result.structuredContent?.body_omitted).toBe(true);
+      expect(parseJsonResult(result)).not.toHaveProperty("body");
+      expect(parseJsonResult(result).body_omitted).toBe(true);
     });
 
     it("create_page uses the explicit lesson template when template='lesson'", async () => {
@@ -253,7 +247,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
       const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toBe('<article class="lesson"><h2>Lesson X</h2><section><p>Body</p></section></article>');
-      expect(result.structuredContent?.template_applied).toBe("lesson");
+      expect(parseJsonResult(result).template_applied).toBe("lesson");
     });
 
     it("create_page uses the assessment template when template='assessment'", async () => {
@@ -288,7 +282,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
       const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toBe("<p>Untouched</p>");
-      expect(result.structuredContent?.template_applied).toBeNull();
+      expect(parseJsonResult(result).template_applied).toBeNull();
     });
 
     it("create_page surfaces a clear error when an unknown template name is passed", async () => {
@@ -323,7 +317,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
       const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toBe("<header>Hdr</header>\n<p>Body</p>");
-      const warnings = result.structuredContent?.warnings as string[];
+      const warnings = parseJsonResult(result).warnings as string[];
       expect(warnings?.[0]).toMatch(/no \{\{body\}\} token/);
     });
 
@@ -340,7 +334,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
       const payload = (requests[0]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toBe("<p>Plain body</p>");
-      expect(result.structuredContent?.template_applied).toBeNull();
+      expect(parseJsonResult(result).template_applied).toBeNull();
     });
 
     it("create_page HTML-escapes the title when substituting into the template", async () => {
@@ -365,13 +359,13 @@ describe("registerPageTools", () => {
       registerPageTools(harness.server as never, client, templatedConfig);
       const result = (await harness.call("list_page_templates")) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      const templates = result.structuredContent?.templates as Array<Record<string, unknown>>;
+      const templates = parseJsonResult(result).templates as Array<Record<string, unknown>>;
       expect(templates.map((entry) => entry.name).sort()).toEqual(["assessment", "default", "headerOnly", "lesson", "multiSlot"]);
       // No 'html' field on any entry — we don't burn tokens echoing back the template HTML.
       for (const entry of templates) {
         expect(entry).not.toHaveProperty("html");
       }
-      expect(result.structuredContent?.default_applied_automatically).toBe(true);
+      expect(parseJsonResult(result).default_applied_automatically).toBe(true);
     });
 
     it("list_page_templates surfaces title_format when configured and null otherwise", async () => {
@@ -379,7 +373,7 @@ describe("registerPageTools", () => {
       const harness = buildToolHarness();
       registerPageTools(harness.server as never, client, templatedConfig);
       const result = (await harness.call("list_page_templates")) as ToolResponse;
-      const templates = result.structuredContent?.templates as Array<Record<string, unknown>>;
+      const templates = parseJsonResult(result).templates as Array<Record<string, unknown>>;
       const byName = Object.fromEntries(templates.map((entry) => [entry.name as string, entry]));
       expect(byName.lesson?.title_format).toBe("Lesson: {name}");
       expect(byName.default?.title_format).toBeNull();
@@ -391,9 +385,9 @@ describe("registerPageTools", () => {
       const harness = buildToolHarness();
       registerPageTools(harness.server as never, client, null);
       const result = (await harness.call("list_page_templates")) as ToolResponse;
-      expect(result.structuredContent?.configured).toBe(false);
-      expect(result.structuredContent?.count).toBe(0);
-      expect(result.structuredContent?.message).toMatch(/SCHOOL_CONFIG/i);
+      expect(parseJsonResult(result).configured).toBe(false);
+      expect(parseJsonResult(result).count).toBe(0);
+      expect(parseJsonResult(result).message).toMatch(/SCHOOL_CONFIG/i);
     });
   });
 
@@ -434,9 +428,9 @@ describe("registerPageTools", () => {
       // SECTION markers themselves should be stripped
       expect(payload.body).not.toContain("<!-- SECTION:");
       expect(payload.body).not.toContain("<!-- /SECTION:");
-      // structuredContent surfaces what was included/omitted
-      expect(result.structuredContent?.included_sections).toEqual(["assessment"]);
-      expect(result.structuredContent?.omitted_sections).toEqual(["discussion"]);
+      // the JSON payload surfaces what was included/omitted
+      expect(parseJsonResult(result).included_sections).toEqual(["assessment"]);
+      expect(parseJsonResult(result).omitted_sections).toEqual(["discussion"]);
     });
 
     it("include_sections forces a default-omit section ON", async () => {
@@ -456,7 +450,7 @@ describe("registerPageTools", () => {
       const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).toContain("class=\"discussion\"");
       expect(payload.body).toContain("<p>What do you think?</p>");
-      expect(result.structuredContent?.included_sections).toEqual(
+      expect(parseJsonResult(result).included_sections).toEqual(
         expect.arrayContaining(["discussion", "assessment"]),
       );
     });
@@ -477,7 +471,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
       const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
       expect(payload.body).not.toContain("class=\"assessment\"");
-      expect(result.structuredContent?.omitted_sections).toEqual(
+      expect(parseJsonResult(result).omitted_sections).toEqual(
         expect.arrayContaining(["assessment", "discussion"]),
       );
     });
@@ -496,7 +490,7 @@ describe("registerPageTools", () => {
         slots: { about: "x" },
         // 'to' is in the template but not provided — should warn
       })) as ToolResponse;
-      const warnings = result.structuredContent?.warnings as string[];
+      const warnings = parseJsonResult(result).warnings as string[];
       expect(warnings.some((line) => line.includes("{{slot:to}}"))).toBe(true);
     });
 
@@ -549,7 +543,7 @@ describe("registerPageTools", () => {
       })) as ToolResponse;
 
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.template_applied).toBe("assessment");
+      expect(parseJsonResult(result).template_applied).toBe("assessment");
 
       const payload = (requests[1]?.data as { wiki_page: { body: string } }).wiki_page;
       // Banner gets course name + title
@@ -608,8 +602,8 @@ describe("registerPageTools", () => {
       expect(payload.body).toContain("<p>Now with a discussion</p>");
       expect(payload.body).toContain('data-course="Design 9"');
       // Result surfaces template metadata
-      expect(result.structuredContent?.template_applied).toBe("multiSlot");
-      expect(result.structuredContent?.included_sections).toEqual(
+      expect(parseJsonResult(result).template_applied).toBe("multiSlot");
+      expect(parseJsonResult(result).included_sections).toEqual(
         expect.arrayContaining(["discussion", "assessment"]),
       );
     });
@@ -677,7 +671,7 @@ describe("registerPageTools", () => {
       const harness = buildToolHarness();
       registerPageTools(harness.server as never, client, templatedConfig);
       const result = (await harness.call("list_page_templates")) as ToolResponse;
-      const templates = result.structuredContent?.templates as Array<{
+      const templates = parseJsonResult(result).templates as Array<{
         name: string;
         slots: Array<{ name: string; description: string | null }>;
         sections: Array<{ name: string; default: string }>;

@@ -3,25 +3,18 @@ import { CanvasApiError } from "../types.js";
 export interface McpTextResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-  structuredContent?: Record<string, unknown>;
   /** Index signature required by the MCP SDK's CallToolResult type. */
   [key: string]: unknown;
 }
 
-/** Wrap a JSON-serializable payload as the tool's text content + structured field. */
+/** Wrap a JSON-serializable payload as compact JSON text (optional summary line first). */
 export function jsonResult(payload: unknown, options: { summary?: string } = {}): McpTextResult {
   const text = options.summary
     ? `${options.summary}\n\n${stringify(payload)}`
     : stringify(payload);
-  const result: McpTextResult = {
+  return {
     content: [{ type: "text", text }],
   };
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    result.structuredContent = payload as Record<string, unknown>;
-  } else {
-    result.structuredContent = { value: payload };
-  }
-  return result;
 }
 
 /** Plain-text result without any structured payload. */
@@ -61,7 +54,7 @@ export async function safeHandler(
 
 function stringify(payload: unknown): string {
   try {
-    return JSON.stringify(payload, null, 2);
+    return JSON.stringify(payload);
   } catch {
     return String(payload);
   }

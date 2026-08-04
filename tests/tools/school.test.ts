@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerSchoolInfoTools } from "../../src/tools/school.js";
 import type { SchoolConfig } from "../../src/schoolConfig.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 const franklinLike: SchoolConfig = {
   schoolName: "Franklin School (Jersey City, NJ)",
@@ -56,10 +50,10 @@ describe("registerSchoolInfoTools", () => {
     registerSchoolInfoTools(harness.server as never, null);
     const result = (await harness.call("get_school_info")) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toMatchObject({
+    expect(parseJsonResult(result)).toMatchObject({
       configured: false,
     });
-    expect((result.structuredContent as { message: string }).message).toMatch(/SCHOOL_CONFIG/);
+    expect((parseJsonResult(result) as { message: string }).message).toMatch(/SCHOOL_CONFIG/);
   });
 
   it("returns the full school info shape when a full config is loaded", async () => {
@@ -68,7 +62,7 @@ describe("registerSchoolInfoTools", () => {
     const result = (await harness.call("get_school_info")) as ToolResponse;
     expect(result.isError).toBeFalsy();
 
-    const content = result.structuredContent as Record<string, unknown>;
+    const content = parseJsonResult(result) as Record<string, unknown>;
     expect(content.configured).toBe(true);
     expect(content.school_name).toBe("Franklin School (Jersey City, NJ)");
     expect(content.page_template_names).toEqual(["lesson", "assessment"]);
@@ -100,7 +94,7 @@ describe("registerSchoolInfoTools", () => {
     };
     registerSchoolInfoTools(harness.server as never, cfg);
     const result = (await harness.call("get_school_info")) as ToolResponse;
-    const calendar = (result.structuredContent as { academic_calendar: { current_week: number } })
+    const calendar = (parseJsonResult(result) as { academic_calendar: { current_week: number } })
       .academic_calendar;
     expect(calendar.current_week).toBe(3);
   });
@@ -113,7 +107,7 @@ describe("registerSchoolInfoTools", () => {
     };
     registerSchoolInfoTools(harness.server as never, cfg);
     const result = (await harness.call("get_school_info")) as ToolResponse;
-    const calendar = (result.structuredContent as {
+    const calendar = (parseJsonResult(result) as {
       academic_calendar: { current_week: number | null };
     }).academic_calendar;
     expect(calendar.current_week).toBeNull();
@@ -123,7 +117,7 @@ describe("registerSchoolInfoTools", () => {
     const harness = buildToolHarness();
     registerSchoolInfoTools(harness.server as never, minimalConfig);
     const result = (await harness.call("get_school_info")) as ToolResponse;
-    const content = result.structuredContent as Record<string, unknown>;
+    const content = parseJsonResult(result) as Record<string, unknown>;
     expect(content.configured).toBe(true);
     expect(content.school_name).toBe("Bare Minimum School");
     expect(content.academic_calendar).toBeNull();

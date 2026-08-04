@@ -3,15 +3,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { Anonymizer } from "../../src/anonymizer.js";
 import { registerAnonymizationTools } from "../../src/tools/anonymization.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 let anonRoot: string;
 let anonymizer: Anonymizer;
@@ -61,8 +55,8 @@ describe("registerAnonymizationTools", () => {
         "enrollment_type[]": ["student"],
         "include[]": ["enrollments", "email"],
       });
-      expect(result.structuredContent?.real_names_visible).toBe(false);
-      const mapping = result.structuredContent?.mapping as Array<{
+      expect(parseJsonResult(result).real_names_visible).toBe(false);
+      const mapping = parseJsonResult(result).mapping as Array<{
         user_id: number;
         real_name: string | null;
         real_email: string | null;
@@ -73,7 +67,7 @@ describe("registerAnonymizationTools", () => {
       // Real names suppressed:
       expect(mapping[0]?.real_name).toBeNull();
       expect(mapping[0]?.real_email).toBeNull();
-      const warnings = result.structuredContent?.warnings as string[];
+      const warnings = parseJsonResult(result).warnings as string[];
       expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
       // The map file on disk still binds real ↔ pseudonym:
       const onDisk = await anonymizer.loadMap(60366);
@@ -97,15 +91,15 @@ describe("registerAnonymizationTools", () => {
       const result = (await harness.call("create_student_anonymization_map", {
         course_identifier: 60366,
       })) as ToolResponse;
-      expect(result.structuredContent?.real_names_visible).toBe(true);
-      expect(result.structuredContent?.newly_allocated).toBe(3);
-      const mapping = result.structuredContent?.mapping as Array<{
+      expect(parseJsonResult(result).real_names_visible).toBe(true);
+      expect(parseJsonResult(result).newly_allocated).toBe(3);
+      const mapping = parseJsonResult(result).mapping as Array<{
         real_name: string;
         pseudonym: string;
       }>;
       expect(mapping.map((entry) => entry.pseudonym)).toEqual(["Student 1", "Student 2", "Student 3"]);
       expect(mapping[0]?.real_name).toBe("Alice");
-      expect(result.structuredContent?.warnings).toBeUndefined();
+      expect(parseJsonResult(result).warnings).toBeUndefined();
     });
 
     it("is idempotent — second call with the same roster reports newly_allocated=0", async () => {
@@ -131,8 +125,8 @@ describe("registerAnonymizationTools", () => {
       const second = (await harness.call("create_student_anonymization_map", {
         course_identifier: 60366,
       })) as ToolResponse;
-      expect(second.structuredContent?.newly_allocated).toBe(0);
-      expect(second.structuredContent?.total_active).toBe(2);
+      expect(parseJsonResult(second).newly_allocated).toBe(0);
+      expect(parseJsonResult(second).total_active).toBe(2);
     });
 
     it("marks removed students historical without renumbering", async () => {
@@ -159,8 +153,8 @@ describe("registerAnonymizationTools", () => {
       const after = (await harness.call("create_student_anonymization_map", {
         course_identifier: 60366,
       })) as ToolResponse;
-      expect(after.structuredContent?.total_active).toBe(2);
-      expect(after.structuredContent?.total_historical).toBe(1);
+      expect(parseJsonResult(after).total_active).toBe(2);
+      expect(parseJsonResult(after).total_historical).toBe(1);
       // Carol keeps Student 3, no renumbering.
       const fileRaw = await fs.readFile(path.join(anonRoot, "60366.json"), "utf8");
       const parsed = JSON.parse(fileRaw) as {
@@ -177,8 +171,8 @@ describe("registerAnonymizationTools", () => {
       const harness = buildToolHarness();
       registerAnonymizationTools(harness.server as never, client, anonymizer);
       const result = (await harness.call("get_anonymization_status")) as ToolResponse;
-      expect(result.structuredContent?.map_count).toBe(0);
-      expect(result.structuredContent?.maps).toEqual([]);
+      expect(parseJsonResult(result).map_count).toBe(0);
+      expect(parseJsonResult(result).maps).toEqual([]);
     });
 
     it("lists every map with course_id, entries, and timestamp", async () => {
@@ -202,7 +196,7 @@ describe("registerAnonymizationTools", () => {
       await harness.call("create_student_anonymization_map", { course_identifier: 200 });
 
       const result = (await harness.call("get_anonymization_status")) as ToolResponse;
-      const maps = result.structuredContent?.maps as Array<{ course_id: number; entries: number }>;
+      const maps = parseJsonResult(result).maps as Array<{ course_id: number; entries: number }>;
       expect(maps).toHaveLength(2);
       expect(maps.find((map) => map.course_id === 100)?.entries).toBe(1);
       expect(maps.find((map) => map.course_id === 200)?.entries).toBe(2);

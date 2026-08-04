@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerCompetencyTools } from "../../src/tools/competencies.js";
 import type { SchoolConfig } from "../../src/schoolConfig.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 const franklinLike: SchoolConfig = {
   schoolName: "Franklin School (Jersey City, NJ)",
@@ -38,10 +32,10 @@ describe("registerCompetencyTools", () => {
     registerCompetencyTools(harness.server as never, franklinLike);
     const result = (await harness.call("list_competencies")) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent?.configured).toBe(true);
-    expect(result.structuredContent?.framework_name).toBe("Franklin's 9 Transdisciplinary Competencies");
-    expect(result.structuredContent?.count).toBe(2);
-    const text = result.structuredContent?.display_text as string;
+    expect(parseJsonResult(result).configured).toBe(true);
+    expect(parseJsonResult(result).framework_name).toBe("Franklin's 9 Transdisciplinary Competencies");
+    expect(parseJsonResult(result).count).toBe(2);
+    const text = parseJsonResult(result).display_text as string;
     expect(text).toContain("1. **Collaboration**");
     expect(text).toContain("2. **Agency**");
     expect(text).toContain("Canonical definitions.");
@@ -52,14 +46,14 @@ describe("registerCompetencyTools", () => {
     registerCompetencyTools(harness.server as never, null);
     const result = (await harness.call("list_competencies")) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent?.configured).toBe(false);
-    expect(result.structuredContent?.message).toMatch(/SCHOOL_CONFIG/);
+    expect(parseJsonResult(result).configured).toBe(false);
+    expect(parseJsonResult(result).message).toMatch(/SCHOOL_CONFIG/);
   });
 
   it("handles a config that has no competencyFramework field gracefully", async () => {
     const harness = buildToolHarness();
     registerCompetencyTools(harness.server as never, { schoolName: "Bare" });
     const result = (await harness.call("list_competencies")) as ToolResponse;
-    expect(result.structuredContent?.configured).toBe(false);
+    expect(parseJsonResult(result).configured).toBe(false);
   });
 });

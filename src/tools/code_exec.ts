@@ -165,25 +165,7 @@ export function registerCodeExecutionTools(server: McpServer, anonymizer: Anonym
         });
 
         const result = await runWorker(worker, timeoutMs);
-        const text = formatHumanReadable(result.payload, { timedOut: result.timedOut });
-        const structured = result.timedOut
-          ? {
-              ok: false,
-              timed_out: true,
-              timeout_seconds: args.timeout_seconds ?? DEFAULT_TIMEOUT_S,
-              memory_mb: memoryMb,
-            }
-          : {
-              ok: result.payload.ok,
-              timed_out: false,
-              duration_ms: result.payload.durationMs,
-              stdout: result.payload.stdout,
-              stderr: result.payload.stderr,
-              ...(result.payload.error
-                ? { error: result.payload.error, error_name: result.payload.errorName, stack: result.payload.stack }
-                : {}),
-            };
-        return { ...textResult(text), structuredContent: structured };
+        return textResult(formatHumanReadable(result.payload, { timedOut: result.timedOut }));
       });
     },
   );

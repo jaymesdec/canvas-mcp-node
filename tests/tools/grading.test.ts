@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerGradingTools } from "../../src/tools/grading.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 function asForm(data: unknown): URLSearchParams {
   if (data instanceof URLSearchParams) return data;
@@ -171,11 +165,11 @@ describe("registerGradingTools", () => {
         rate_limit_delay: 0,
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.graded).toBe(3);
-      expect(result.structuredContent?.failed).toBe(0);
-      expect(result.structuredContent?.skipped).toBe(0);
+      expect(parseJsonResult(result).graded).toBe(3);
+      expect(parseJsonResult(result).failed).toBe(0);
+      expect(parseJsonResult(result).skipped).toBe(0);
       expect(requests).toHaveLength(4); // 1 list + 3 writes
-      const written = result.structuredContent?.written as Array<{ user_id: string }>;
+      const written = parseJsonResult(result).written as Array<{ user_id: string }>;
       expect(written.map((entry) => entry.user_id).sort()).toEqual(["1001", "1002", "1003"]);
     });
 
@@ -197,9 +191,9 @@ describe("registerGradingTools", () => {
         },
         rate_limit_delay: 0,
       })) as ToolResponse;
-      expect(result.structuredContent?.graded).toBe(1);
-      expect(result.structuredContent?.skipped).toBe(1);
-      const skipped = result.structuredContent?.skipped_results as Array<{ user_id: string; reason: string }>;
+      expect(parseJsonResult(result).graded).toBe(1);
+      expect(parseJsonResult(result).skipped).toBe(1);
+      const skipped = parseJsonResult(result).skipped_results as Array<{ user_id: string; reason: string }>;
       expect(skipped[0]?.user_id).toBe("1002");
       expect(skipped[0]?.reason).toMatch(/no current submission/);
     });
@@ -222,10 +216,10 @@ describe("registerGradingTools", () => {
         dry_run: true,
         rate_limit_delay: 0,
       })) as ToolResponse;
-      expect(result.structuredContent?.dry_run).toBe(true);
-      expect(result.structuredContent?.graded).toBe(2);
+      expect(parseJsonResult(result).dry_run).toBe(true);
+      expect(parseJsonResult(result).graded).toBe(2);
       expect(requests).toHaveLength(1); // only the submission-list fetch
-      const payloads = result.structuredContent?.dry_run_payloads as Array<{
+      const payloads = parseJsonResult(result).dry_run_payloads as Array<{
         user_id: string;
         payload: Record<string, string>;
       }>;
@@ -256,9 +250,9 @@ describe("registerGradingTools", () => {
         max_concurrent: 2,
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.graded).toBe(1);
-      expect(result.structuredContent?.failed).toBe(1);
-      const failed = result.structuredContent?.failed_results as Array<{ user_id: string; error: string }>;
+      expect(parseJsonResult(result).graded).toBe(1);
+      expect(parseJsonResult(result).failed).toBe(1);
+      const failed = parseJsonResult(result).failed_results as Array<{ user_id: string; error: string }>;
       expect(failed[0]?.user_id).toBe("1002");
       expect(failed[0]?.error).toMatch(/Invalid posted_grade|422/);
     });
@@ -294,9 +288,9 @@ describe("registerGradingTools", () => {
         max_concurrent: 2,
         rate_limit_delay: 0,
       })) as ToolResponse;
-      expect(result.structuredContent?.graded).toBe(1);
-      expect(result.structuredContent?.failed).toBe(1);
-      const unprocessed = result.structuredContent?.unprocessed_user_ids as string[];
+      expect(parseJsonResult(result).graded).toBe(1);
+      expect(parseJsonResult(result).failed).toBe(1);
+      const unprocessed = parseJsonResult(result).unprocessed_user_ids as string[];
       expect(unprocessed.sort()).toEqual(["1003", "1004"]);
     });
   });

@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerModuleTools } from "../../src/tools/modules.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 describe("registerModuleTools", () => {
   it("registers create_module, list_modules, and add_module_item", () => {
@@ -44,7 +38,7 @@ describe("registerModuleTools", () => {
       expect(payload).not.toHaveProperty("published");
       expect(payload).not.toHaveProperty("workflow_state");
       expect(payload.name).toContain("Module 4");
-      const created = (result.structuredContent?.module as { workflow_state?: string });
+      const created = (parseJsonResult(result).module as { workflow_state?: string });
       expect(created.workflow_state).toBe("unpublished");
     });
 
@@ -96,7 +90,7 @@ describe("registerModuleTools", () => {
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules");
     expect(requests[0]?.params).toMatchObject({ "include[]": ["items"] });
-    const modules = result.structuredContent?.modules as Array<{ items: unknown[] }>;
+    const modules = parseJsonResult(result).modules as Array<{ items: unknown[] }>;
     expect(modules[0]?.items).toHaveLength(1);
   });
 

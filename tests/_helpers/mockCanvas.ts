@@ -105,12 +105,17 @@ export interface RecordedTool {
   handler: (args: unknown, extra?: unknown) => Promise<unknown>;
 }
 
+export interface ToolResponse {
+  content?: Array<{ type: string; text: string }>;
+  isError?: boolean;
+}
+
 export interface ToolHarness {
   server: {
     registerTool: (name: string, config: { description?: string; inputSchema?: unknown }, handler: (args: unknown, extra?: unknown) => Promise<unknown>) => void;
   };
   tools: Map<string, RecordedTool>;
-  call: (name: string, args?: unknown) => Promise<{ content?: Array<{ type: string; text: string }>; isError?: boolean; structuredContent?: Record<string, unknown> }>;
+  call: (name: string, args?: unknown) => Promise<ToolResponse>;
 }
 
 export function buildToolHarness(): ToolHarness {
@@ -133,4 +138,22 @@ export function buildToolHarness(): ToolHarness {
       return (await tool.handler(args, {})) as never;
     },
   };
+}
+
+/**
+ * Parse the compact JSON payload out of a jsonResult-shaped tool response.
+ * Expects a non-error result; tests asserting errors should match on
+ * `result.isError` / `result.content[0].text` directly.
+ */
+export function parseJsonResult<T = Record<string, unknown>>(result: ToolResponse): T {
+  if (result.isError) {
+    throw new Error(`parseJsonResult: got an error result: ${result.content?.[0]?.text ?? "<no text>"}`);
+  }
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string") {
+    throw new Error("parseJsonResult: result has no text content");
+  }
+  const separatorIndex = text.indexOf("\n\n");
+  const jsonText = separatorIndex >= 0 ? text.slice(separatorIndex + 2) : text;
+  return JSON.parse(jsonText) as T;
 }

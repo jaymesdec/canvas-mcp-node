@@ -3,16 +3,10 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { Anonymizer } from "../../src/anonymizer.js";
 import { registerUserTools } from "../../src/tools/users.js";
 import { registerAssignmentTools } from "../../src/tools/assignments.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 /**
  * Cross-tool integration: confirm that a given student receives the SAME pseudonym
@@ -76,7 +70,7 @@ describe("anonymization wiring across tools (Unit 4.2)", () => {
     const usersResult = (await harness.call("list_users", {
       course_identifier: 60366,
     })) as ToolResponse;
-    const users = usersResult.structuredContent?.users as Array<{ id: number; name: string }>;
+    const users = parseJsonResult(usersResult).users as Array<{ id: number; name: string }>;
     const bobPseudonym = users.find((user) => user.id === 1002)?.name;
     expect(bobPseudonym).toMatch(/^Student \d+$/);
 
@@ -84,7 +78,7 @@ describe("anonymization wiring across tools (Unit 4.2)", () => {
       course_identifier: 60366,
       include: ["submission"],
     })) as ToolResponse;
-    const assignments = assignmentsResult.structuredContent?.assignments as Array<{
+    const assignments = parseJsonResult(assignmentsResult).assignments as Array<{
       submission: { user: { name: string; id: number } };
     }>;
     expect(assignments[0]?.submission.user.id).toBe(1002);
@@ -109,8 +103,8 @@ describe("anonymization wiring across tools (Unit 4.2)", () => {
 
     const resultA = (await harness.call("list_users", { course_identifier: 100 })) as ToolResponse;
     const resultB = (await harness.call("list_users", { course_identifier: 200 })) as ToolResponse;
-    const usersA = resultA.structuredContent?.users as Array<{ name: string }>;
-    const usersB = resultB.structuredContent?.users as Array<{ name: string }>;
+    const usersA = parseJsonResult(resultA).users as Array<{ name: string }>;
+    const usersB = parseJsonResult(resultB).users as Array<{ name: string }>;
     // Both are "Student 1" in their respective courses — text matches but they're independent allocations.
     expect(usersA[0]?.name).toBe("Student 1");
     expect(usersB[0]?.name).toBe("Student 1");

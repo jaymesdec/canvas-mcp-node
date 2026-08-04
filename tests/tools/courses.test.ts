@@ -1,13 +1,44 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
+import { jsonResult } from "../../src/tools/toolHelpers.js";
 import { registerCourseTools } from "../../src/tools/courses.js";
 
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
+describe("jsonResult", () => {
+  it("emits summary + compact JSON as the only representation", () => {
+    const result = jsonResult({ a: 1, nested: { b: 2 } }, { summary: "S" });
+    expect(result.content).toEqual([{ type: "text", text: 'S\n\n{"a":1,"nested":{"b":2}}' }]);
+    expect(Object.keys(result)).toEqual(["content"]);
+  });
+
+  it("emits compact JSON alone when no summary is given", () => {
+    const result = jsonResult({ a: 1 });
+    expect(result.content?.[0]?.text).toBe('{"a":1}');
+    expect(Object.keys(result)).toEqual(["content"]);
+  });
+
+  it("stringifies non-object payloads without wrapper objects", () => {
+    expect(jsonResult([1, 2]).content?.[0]?.text).toBe("[1,2]");
+    expect(jsonResult("plain").content?.[0]?.text).toBe('"plain"');
+  });
+});
+
+describe("parseJsonResult", () => {
+  it("parses the payload after the summary line", () => {
+    const parsed = parseJsonResult(jsonResult({ count: 2 }, { summary: "2 course(s) found." }));
+    expect(parsed).toEqual({ count: 2 });
+  });
+
+  it("parses a summary-less payload", () => {
+    expect(parseJsonResult(jsonResult([1, 2]))).toEqual([1, 2]);
+  });
+
+  it("throws on error results instead of parsing them", () => {
+    expect(() =>
+      parseJsonResult({ content: [{ type: "text", text: "boom" }], isError: true }),
+    ).toThrow(/error result/);
+  });
+});
 
 describe("registerCourseTools", () => {
   it("registers list_courses, list_account_courses, and get_course_details", () => {
@@ -49,8 +80,8 @@ describe("registerCourseTools", () => {
 
       const result = (await harness.call("list_courses")) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.count).toBe(2);
-      const courses = result.structuredContent?.courses as Array<{ course_code: string; id: number }>;
+      expect(parseJsonResult(result).count).toBe(2);
+      const courses = parseJsonResult(result).courses as Array<{ course_code: string; id: number }>;
       expect(courses).toHaveLength(2);
       expect(courses[0]?.course_code).toBe("DSGN_9_120251");
       expect(courses[0]?.id).toBe(60366);
@@ -88,7 +119,7 @@ describe("registerCourseTools", () => {
 
       const result = (await harness.call("get_course_details", { course_identifier: 60366 })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.course_code).toBe("DSGN_9_120251");
+      expect(parseJsonResult(result).course_code).toBe("DSGN_9_120251");
       expect(requests[0]?.url).toBe("/api/v1/courses/60366");
     });
 
@@ -163,7 +194,7 @@ describe("registerCourseTools", () => {
         "state[]": ["available"],
         "include[]": ["term", "total_students"],
       });
-      const courses = result.structuredContent?.courses as Array<{ course_code: string; name: string }>;
+      const courses = parseJsonResult(result).courses as Array<{ course_code: string; name: string }>;
       expect(courses).toHaveLength(2);
       expect(courses.map((course) => course.course_code).sort()).toEqual(["ART 121", "DES 325"]);
     });
@@ -178,7 +209,7 @@ describe("registerCourseTools", () => {
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
       expect(requests[0]?.url).toBe("/api/v1/accounts/self/courses");
-      expect(result.structuredContent?.account_id).toBe("self");
+      expect(parseJsonResult(result).account_id).toBe("self");
     });
 
     it("errors clearly when account_id is missing and no env var is set", async () => {

@@ -3,15 +3,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerAssignmentTools } from "../../src/tools/assignments.js";
 import { Anonymizer } from "../../src/anonymizer.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "canvas-anon-assign-"));
@@ -54,7 +48,7 @@ describe("registerAssignmentTools", () => {
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments");
     expect(requests[0]?.params).toMatchObject({ "include[]": ["all_dates"] });
-    expect(result.structuredContent?.count).toBe(2);
+    expect(parseJsonResult(result).count).toBe(2);
   });
 
   it("list_assignments with include=submission anonymizes embedded student data when anonymous=true (default)", async () => {
@@ -82,8 +76,8 @@ describe("registerAssignmentTools", () => {
       include: ["submission"],
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent?.anonymized).toBe(true);
-    const assignments = result.structuredContent?.assignments as Array<{
+    expect(parseJsonResult(result).anonymized).toBe(true);
+    const assignments = parseJsonResult(result).assignments as Array<{
       submission: { user: { name: string } };
     }>;
     expect(assignments[0]?.submission.user.name).toBe("Student 1");
@@ -113,12 +107,12 @@ describe("registerAssignmentTools", () => {
         include: ["submission"],
         anonymous: false,
       })) as ToolResponse;
-      expect(result.structuredContent?.anonymized).toBe(true);
-      const assignments = result.structuredContent?.assignments as Array<{
+      expect(parseJsonResult(result).anonymized).toBe(true);
+      const assignments = parseJsonResult(result).assignments as Array<{
         submission: { user: { name: string } };
       }>;
       expect(assignments[0]?.submission.user.name).toBe("Student 1");
-      const warnings = result.structuredContent?.warnings as string[];
+      const warnings = parseJsonResult(result).warnings as string[];
       expect(warnings?.[0]).toMatch(/CANVAS_MCP_ALLOW_DEANONYMIZE/);
     } finally {
       if (previousEnv === undefined) delete process.env.CANVAS_MCP_ALLOW_DEANONYMIZE;
@@ -150,8 +144,8 @@ describe("registerAssignmentTools", () => {
         include: ["submission"],
         anonymous: false,
       })) as ToolResponse;
-      expect(result.structuredContent?.anonymized).toBe(false);
-      const assignments = result.structuredContent?.assignments as Array<{
+      expect(parseJsonResult(result).anonymized).toBe(false);
+      const assignments = parseJsonResult(result).assignments as Array<{
         submission: { user: { name: string } };
       }>;
       expect(assignments[0]?.submission.user.name).toBe("Alice Real");
@@ -174,7 +168,7 @@ describe("registerAssignmentTools", () => {
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments/999");
-    expect(result.structuredContent?.id).toBe(999);
+    expect(parseJsonResult(result).id).toBe(999);
   });
 
   it("get_assignment_rubric_details surfaces a clean message when no rubric is attached", async () => {
@@ -189,8 +183,8 @@ describe("registerAssignmentTools", () => {
       assignment_id: 999,
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent?.rubric).toBeNull();
-    expect(result.structuredContent?.message).toMatch(/No rubric/);
+    expect(parseJsonResult(result).rubric).toBeNull();
+    expect(parseJsonResult(result).message).toMatch(/No rubric/);
   });
 
   it("get_assignment_rubric_details returns criterion list when rubric is attached", async () => {
@@ -214,9 +208,9 @@ describe("registerAssignmentTools", () => {
       course_identifier: 60366,
       assignment_id: 999,
     })) as ToolResponse;
-    const rubric = result.structuredContent?.rubric as Array<{ id: string }>;
+    const rubric = parseJsonResult(result).rubric as Array<{ id: string }>;
     expect(rubric).toHaveLength(2);
     expect(rubric[0]?.id).toBe("_8027");
-    expect(result.structuredContent?.rubric_settings).toMatchObject({ points_possible: 8 });
+    expect(parseJsonResult(result).rubric_settings).toMatchObject({ points_possible: 8 });
   });
 });

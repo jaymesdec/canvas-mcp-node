@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMockCanvas, buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { registerRubricTools } from "../../src/tools/rubrics.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 function asForm(data: unknown): URLSearchParams {
   if (data instanceof URLSearchParams) return data;
@@ -48,7 +42,7 @@ describe("registerRubricTools", () => {
     const result = (await harness.call("list_all_rubrics", { course_identifier: 60366 })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/rubrics");
-    const rubrics = result.structuredContent?.rubrics as Array<{ id: number; title: string; criteria: unknown[] }>;
+    const rubrics = parseJsonResult(result).rubrics as Array<{ id: number; title: string; criteria: unknown[] }>;
     expect(rubrics).toHaveLength(1);
     expect(rubrics[0]?.title).toBe("Project Rubric");
     expect(rubrics[0]?.criteria).toHaveLength(1);
@@ -59,8 +53,8 @@ describe("registerRubricTools", () => {
     const harness = buildToolHarness();
     registerRubricTools(harness.server as never, client);
     const result = (await harness.call("list_all_rubrics", { course_identifier: 60366 })) as ToolResponse;
-    expect(result.structuredContent?.count).toBe(0);
-    expect(result.structuredContent?.message).toMatch(/No rubrics/);
+    expect(parseJsonResult(result).count).toBe(0);
+    expect(parseJsonResult(result).message).toMatch(/No rubrics/);
   });
 
   it("list_all_rubrics with include_criteria=false omits the criteria field", async () => {
@@ -76,7 +70,7 @@ describe("registerRubricTools", () => {
       course_identifier: 60366,
       include_criteria: false,
     })) as ToolResponse;
-    const rubrics = result.structuredContent?.rubrics as Array<Record<string, unknown>>;
+    const rubrics = parseJsonResult(result).rubrics as Array<Record<string, unknown>>;
     expect(rubrics[0]).not.toHaveProperty("criteria");
   });
 
@@ -92,7 +86,7 @@ describe("registerRubricTools", () => {
     })) as ToolResponse;
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/rubrics/555");
-    expect(result.structuredContent?.id).toBe(555);
+    expect(parseJsonResult(result).id).toBe(555);
   });
 
   describe("create_rubric", () => {
@@ -193,7 +187,7 @@ describe("registerRubricTools", () => {
       expect(body.get("rubric_association[association_id]")).toBe("5555");
       expect(body.get("rubric_association[use_for_grading]")).toBe("true");
       expect(body.get("rubric_association[purpose]")).toBe("grading");
-      const association = result.structuredContent?.rubric_association as { id: number };
+      const association = parseJsonResult(result).rubric_association as { id: number };
       expect(association?.id).toBe(1234);
     });
 
@@ -249,7 +243,7 @@ describe("registerRubricTools", () => {
       expect(body.get("rubric_association[association_id]")).toBe("5555");
       expect(body.get("rubric_association[use_for_grading]")).toBe("true");
       expect(body.get("rubric_association[purpose]")).toBe("grading");
-      const association = result.structuredContent?.rubric_association as { id: number };
+      const association = parseJsonResult(result).rubric_association as { id: number };
       expect(association?.id).toBe(7777);
     });
 

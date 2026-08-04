@@ -3,15 +3,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildToolHarness } from "../_helpers/mockCanvas.js";
+import { buildToolHarness, parseJsonResult, type ToolResponse } from "../_helpers/mockCanvas.js";
 import { Anonymizer } from "../../src/anonymizer.js";
 import { registerCodeExecutionTools } from "../../src/tools/code_exec.js";
-
-interface ToolResponse {
-  content?: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-}
 
 let anonRoot: string;
 let anonymizer: Anonymizer;
@@ -48,10 +42,10 @@ describe("registerCodeExecutionTools", () => {
     registerCodeExecutionTools(harness.server as never, anonymizer);
     const result = (await harness.call("list_code_api_modules")) as ToolResponse;
     expect(result.isError).toBeFalsy();
-    const modules = result.structuredContent?.modules as Array<{ module: string; exports: string[] }>;
+    const modules = parseJsonResult(result).modules as Array<{ module: string; exports: string[] }>;
     expect(modules.some((entry) => entry.module === "./anonymizer.js")).toBe(true);
     expect(modules.some((entry) => entry.module === "./canvas/grading/bulkGrade.js")).toBe(true);
-    expect(result.structuredContent?.ferpa_note).toMatch(/anonymizer\.js/);
+    expect(parseJsonResult(result).ferpa_note).toMatch(/anonymizer\.js/);
   });
 
   describe("execute_typescript (real worker)", () => {
@@ -63,10 +57,9 @@ describe("registerCodeExecutionTools", () => {
         timeout_seconds: 30,
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent?.ok).toBe(true);
-      expect(result.structuredContent?.stdout).toContain("hello from worker 3");
       const text = result.content?.[0]?.text ?? "";
-      expect(text).toContain("✅");
+      expect(text).toContain("✅ Execution completed");
+      expect(text).toContain("hello from worker 3");
     }, 30_000);
 
     it("syntax error returns a structured error result without crashing the harness", async () => {
@@ -76,10 +69,9 @@ describe("registerCodeExecutionTools", () => {
         code: "this is not valid typescript;",
         timeout_seconds: 30,
       })) as ToolResponse;
-      expect(result.isError).toBeFalsy(); // it's a tool RESULT, just with ok:false
-      expect(result.structuredContent?.ok).toBe(false);
+      expect(result.isError).toBeFalsy(); // it's a tool RESULT, just a failed execution
       const text = result.content?.[0]?.text ?? "";
-      expect(text).toContain("❌");
+      expect(text).toContain("❌ Execution failed");
     }, 30_000);
 
     it("infinite loop is terminated at the timeout", async () => {
@@ -89,8 +81,7 @@ describe("registerCodeExecutionTools", () => {
         code: "while (true) { /* spin */ }",
         timeout_seconds: 2,
       })) as ToolResponse;
-      expect(result.structuredContent?.timed_out).toBe(true);
-      expect(result.content?.[0]?.text).toContain("timed out");
+      expect(result.content?.[0]?.text).toContain("❌ Execution timed out");
     }, 15_000);
 
     it("network guard blocks an outbound fetch to a non-allowlisted host", async () => {
@@ -110,9 +101,9 @@ describe("registerCodeExecutionTools", () => {
         `,
         timeout_seconds: 15,
       })) as ToolResponse;
-      const stdout = (result.structuredContent?.stdout as string) ?? "";
-      expect(stdout).toContain("SANDBOX_NETWORK_BLOCKED");
-      expect(stdout).not.toContain("FETCH_SUCCEEDED");
+      const text = result.content?.[0]?.text ?? "";
+      expect(text).toContain("SANDBOX_NETWORK_BLOCKED");
+      expect(text).not.toContain("FETCH_SUCCEEDED");
     }, 30_000);
 
     it("user code can import the code_api anonymizer adapter and pseudonymize", async () => {
@@ -137,11 +128,11 @@ describe("registerCodeExecutionTools", () => {
         `,
         timeout_seconds: 30,
       })) as ToolResponse;
-      expect(result.structuredContent?.ok).toBe(true);
-      const stdout = (result.structuredContent?.stdout as string) ?? "";
-      expect(stdout).toContain('"Student 1"');
-      expect(stdout).toContain('"Student 2"');
-      expect(stdout).not.toContain("Alice Real");
+      const text = result.content?.[0]?.text ?? "";
+      expect(text).toContain("✅ Execution completed");
+      expect(text).toContain('"Student 1"');
+      expect(text).toContain('"Student 2"');
+      expect(text).not.toContain("Alice Real");
     }, 30_000);
 
     it("scrubs the CANVAS_API_TOKEN value from stdout/stderr if user code logs it", async () => {
@@ -152,9 +143,9 @@ describe("registerCodeExecutionTools", () => {
         code: 'console.log("token is:", process.env.CANVAS_API_TOKEN);',
         timeout_seconds: 15,
       })) as ToolResponse;
-      const stdout = (result.structuredContent?.stdout as string) ?? "";
-      expect(stdout).not.toContain("very-secret-token-1234567890");
-      expect(stdout).toContain("***REDACTED***");
+      const text = result.content?.[0]?.text ?? "";
+      expect(text).not.toContain("very-secret-token-1234567890");
+      expect(text).toContain("***REDACTED***");
     }, 30_000);
   });
 });
