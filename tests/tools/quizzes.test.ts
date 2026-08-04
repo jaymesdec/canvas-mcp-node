@@ -11,9 +11,24 @@ describe("registerQuizTools", () => {
     expect([...harness.tools.keys()].sort()).toEqual(["create_quiz", "create_quiz_question"]);
   });
 
-  it("create_quiz forces published:false and defaults quiz_type to assignment", async () => {
+  it("create_quiz forces published:false, defaults quiz_type to assignment, and returns the trimmed quiz shape", async () => {
     const { client, requests } = buildMockCanvas([
-      { status: 200, data: { id: 999, title: "Week 1 Quiz", quiz_type: "assignment", published: false } },
+      {
+        status: 200,
+        data: {
+          id: 999,
+          title: "Week 1 Quiz",
+          quiz_type: "assignment",
+          published: false,
+          due_at: null,
+          points_possible: 10,
+          question_count: 0,
+          html_url: "https://canvas.example.com/courses/60366/quizzes/999",
+          access_code: null,
+          all_dates: [],
+          permissions: { read: true, update: true },
+        },
+      },
     ]);
     const harness = buildToolHarness();
     registerQuizTools(harness.server as never, client);
@@ -30,6 +45,12 @@ describe("registerQuizTools", () => {
       quiz_type: "assignment",
       published: false,
     });
+    const created = parseJsonResult(result);
+    expect(Object.keys(created).sort()).toEqual(
+      ["id", "title", "quiz_type", "published", "due_at", "points_possible", "question_count", "html_url"].sort(),
+    );
+    expect(created.published).toBe(false);
+    expect(created).not.toHaveProperty("permissions");
   });
 
   it("create_quiz threads optional fields through to Canvas", async () => {

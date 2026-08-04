@@ -28,6 +28,22 @@ export function isDeanonymizationAllowed(): boolean {
   return readBoolEnv("CANVAS_MCP_ALLOW_DEANONYMIZE");
 }
 
+/**
+ * Resolve the effective anonymization flag, honoring the operator env gate.
+ * When the caller asks for anonymous: false but CANVAS_MCP_ALLOW_DEANONYMIZE is
+ * not set, force back to true; callers surface DEANON_DENIED_NOTE in warnings[].
+ */
+export function resolveAnonymous(requested: boolean | undefined): {
+  anonymous: boolean;
+  overridden: boolean;
+} {
+  const wantedAnonymous = requested ?? true;
+  if (wantedAnonymous === false && !isDeanonymizationAllowed()) {
+    return { anonymous: true, overridden: true };
+  }
+  return { anonymous: wantedAnonymous, overridden: false };
+}
+
 export const DEANON_DENIED_NOTE =
   "anonymous=false was requested but the operator has not opted in to de-anonymized output " +
   "(set CANVAS_MCP_ALLOW_DEANONYMIZE=true in the MCP server env and restart). " +

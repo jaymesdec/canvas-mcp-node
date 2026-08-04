@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
-import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 
 const QUIZ_TYPE = z
   .enum(["practice_quiz", "assignment", "graded_survey", "survey"])
@@ -66,6 +66,21 @@ interface CanvasQuizLite {
   points_possible?: number | null;
 }
 
+const QUIZ_DISPLAY_KEYS = [
+  "id",
+  "title",
+  "quiz_type",
+  "published",
+  "due_at",
+  "points_possible",
+  "question_count",
+  "html_url",
+] as const;
+
+function displayQuiz(quiz: CanvasQuizLite): Record<string, unknown> {
+  return pickFields(quiz as unknown as Record<string, unknown>, QUIZ_DISPLAY_KEYS);
+}
+
 interface CanvasQuizQuestionLite {
   id: number;
   quiz_id: number;
@@ -104,7 +119,7 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
           `/api/v1/courses/${courseId}/quizzes`,
           { quiz: quizPayload },
         );
-        return jsonResult(created, {
+        return jsonResult(displayQuiz(created), {
           summary: `Created draft quiz "${created.title}" (id ${created.id}).`,
         });
       });

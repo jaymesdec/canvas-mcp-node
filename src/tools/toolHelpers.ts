@@ -60,6 +60,21 @@ function stringify(payload: unknown): string {
   }
 }
 
+/**
+ * Allowlist projection: copy only `keys` from `source`, null-filling absent
+ * values so trimmed shapes are stable across Canvas payload variations.
+ */
+export function pickFields<T extends Record<string, unknown>>(
+  source: T,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  for (const key of keys) {
+    projected[key] = source[key] ?? null;
+  }
+  return projected;
+}
+
 /** Map of common include[] params into Canvas's repeated-key array format. */
 export function buildIncludeParams(include: string[] | undefined): Record<string, unknown> {
   if (!include || include.length === 0) return {};

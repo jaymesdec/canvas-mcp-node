@@ -5,24 +5,8 @@ import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
 import { CanvasApiError, type CanvasUserLite } from "../types.js";
 import { jsonResult, safeHandler } from "./toolHelpers.js";
-import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
+import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
 import { resolveAccountId } from "./courses.js";
-
-/**
- * Resolve the effective anonymization flag, honoring the operator env gate.
- * When the caller asks for anonymous: false but CANVAS_MCP_ALLOW_DEANONYMIZE is
- * not set, force back to true and surface a warning in the response.
- */
-function resolveAnonymous(requested: boolean | undefined): {
-  anonymous: boolean;
-  overridden: boolean;
-} {
-  const wantedAnonymous = requested ?? true;
-  if (wantedAnonymous === false && !isDeanonymizationAllowed()) {
-    return { anonymous: true, overridden: true };
-  }
-  return { anonymous: wantedAnonymous, overridden: false };
-}
 
 const LIST_USERS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),

@@ -67,7 +67,7 @@ describe("registerModuleTools", () => {
     });
   });
 
-  it("list_modules with include_items=true threads include[]=items", async () => {
+  it("list_modules with include_items=true threads include[]=items and returns trimmed modules + items", async () => {
     const { client, requests } = buildMockCanvas([
       {
         status: 200,
@@ -75,7 +75,25 @@ describe("registerModuleTools", () => {
           {
             id: 11,
             name: "Week 1",
-            items: [{ id: 100, title: "Welcome", type: "SubHeader" }],
+            position: 1,
+            workflow_state: "active",
+            published: true,
+            items_count: 1,
+            unlock_at: null,
+            require_sequential_progress: false,
+            prerequisite_module_ids: [],
+            items_url: "https://canvas.example.com/api/v1/courses/60366/modules/11/items",
+            items: [
+              {
+                id: 100,
+                title: "Welcome",
+                type: "SubHeader",
+                position: 1,
+                published: true,
+                indent: 0,
+                html_url: "https://canvas.example.com/courses/60366/modules/items/100",
+              },
+            ],
           },
         ],
       },
@@ -90,8 +108,39 @@ describe("registerModuleTools", () => {
     expect(result.isError).toBeFalsy();
     expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules");
     expect(requests[0]?.params).toMatchObject({ "include[]": ["items"] });
-    const modules = parseJsonResult(result).modules as Array<{ items: unknown[] }>;
+    const modules = parseJsonResult(result).modules as Array<Record<string, unknown>>;
     expect(modules[0]?.items).toHaveLength(1);
+    expect(Object.keys(modules[0]!).sort()).toEqual(
+      [
+        "id",
+        "name",
+        "position",
+        "workflow_state",
+        "published",
+        "items_count",
+        "unlock_at",
+        "require_sequential_progress",
+        "prerequisite_module_ids",
+        "items",
+      ].sort(),
+    );
+    const items = modules[0]?.items as Array<Record<string, unknown>>;
+    expect(Object.keys(items[0]!).sort()).toEqual(
+      ["id", "title", "type", "content_id", "page_url", "position", "published"].sort(),
+    );
+    expect(JSON.stringify(parseJsonResult(result))).not.toContain("items_url");
+  });
+
+  it("list_modules without include_items returns trimmed modules with no items key", async () => {
+    const { client } = buildMockCanvas([
+      { status: 200, data: [{ id: 11, name: "Week 1", position: 1, workflow_state: "active" }] },
+    ]);
+    const harness = buildToolHarness();
+    registerModuleTools(harness.server as never, client);
+    const result = (await harness.call("list_modules", { course_identifier: 60366 })) as ToolResponse;
+    const modules = parseJsonResult(result).modules as Array<Record<string, unknown>>;
+    expect(modules[0]).not.toHaveProperty("items");
+    expect(modules[0]?.name).toBe("Week 1");
   });
 
   it("add_module_item for a Page routes content_id to module_item.page_url (Canvas API requirement)", async () => {

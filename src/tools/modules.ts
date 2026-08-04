@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
-import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 
 /** Module item types supported in this first cut. The full Canvas enum is larger;
  *  we ship what the planning skills need today and extend on demand. */
@@ -81,6 +81,38 @@ interface CanvasModuleItem {
   page_url?: string;
 }
 
+const MODULE_DISPLAY_KEYS = [
+  "id",
+  "name",
+  "position",
+  "workflow_state",
+  "published",
+  "items_count",
+  "unlock_at",
+  "require_sequential_progress",
+  "prerequisite_module_ids",
+] as const;
+
+const MODULE_ITEM_DISPLAY_KEYS = [
+  "id",
+  "title",
+  "type",
+  "content_id",
+  "page_url",
+  "position",
+  "published",
+] as const;
+
+function displayModule(module: CanvasModule): Record<string, unknown> {
+  const trimmed = pickFields(module as unknown as Record<string, unknown>, MODULE_DISPLAY_KEYS);
+  if (Array.isArray(module.items)) {
+    trimmed.items = module.items.map((item) =>
+      pickFields(item as unknown as Record<string, unknown>, MODULE_ITEM_DISPLAY_KEYS),
+    );
+  }
+  return trimmed;
+}
+
 export function registerModuleTools(server: McpServer, canvas: CanvasClient): void {
   server.registerTool(
     "create_module",
@@ -145,7 +177,7 @@ export function registerModuleTools(server: McpServer, canvas: CanvasClient): vo
           { params },
         );
         return jsonResult(
-          { course_id: courseId, count: modules.length, pages, truncated, modules },
+          { course_id: courseId, count: modules.length, pages, truncated, modules: modules.map(displayModule) },
           { summary: `Course ${courseId}: ${modules.length} module(s).` },
         );
       });

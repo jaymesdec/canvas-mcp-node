@@ -3,8 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
-import { jsonResult, safeHandler } from "./toolHelpers.js";
-import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
+import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
+import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
+import { displaySubmission } from "./submissions.js";
 
 const LIST_ASSIGNMENTS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -16,6 +17,14 @@ const LIST_ASSIGNMENTS_INPUT = {
     .array(z.string())
     .optional()
     .describe("Canvas include[] tokens: e.g., 'submission', 'submission_history', 'all_dates', 'overrides'."),
+  include_description: z
+    .boolean()
+    .optional()
+    .describe("Include each assignment's HTML description. Defaults to false to keep responses compact."),
+  published_only: z
+    .boolean()
+    .optional()
+    .describe("If true, only published assignments are returned. Defaults to false."),
   anonymous: z
     .boolean()
     .optional()
@@ -39,13 +48,56 @@ interface CanvasAssignment {
   name?: string;
   description?: string;
   due_at?: string | null;
+  unlock_at?: string | null;
+  lock_at?: string | null;
   points_possible?: number | null;
   submission_types?: string[];
+  published?: boolean;
   workflow_state?: string;
   rubric?: Array<Record<string, unknown>> | null;
   rubric_settings?: Record<string, unknown> | null;
   submission?: Record<string, unknown> | null;
   submission_history?: Record<string, unknown>[] | null;
+}
+
+const ASSIGNMENT_DISPLAY_KEYS = [
+  "id",
+  "name",
+  "due_at",
+  "unlock_at",
+  "lock_at",
+  "points_possible",
+  "published",
+  "workflow_state",
+  "submission_types",
+] as const;
+
+/**
+ * Allowlist projection for a list_assignments row. Embedded submission data
+ * must already be anonymized (R3a: anonymize first, trim second).
+ */
+function displayAssignment(
+  assignment: CanvasAssignment,
+  options: { includeDescription: boolean },
+): Record<string, unknown> {
+  const trimmed = pickFields(assignment as unknown as Record<string, unknown>, ASSIGNMENT_DISPLAY_KEYS);
+  trimmed.has_rubric = Array.isArray(assignment.rubric)
+    ? assignment.rubric.length > 0
+    : Boolean(assignment.rubric);
+  if (options.includeDescription) trimmed.description = assignment.description ?? null;
+  if (assignment.submission && typeof assignment.submission === "object") {
+    trimmed.submission = displaySubmission(assignment.submission);
+  }
+  if (Array.isArray(assignment.submission_history)) {
+    trimmed.submission_history = assignment.submission_history.map((entry) =>
+      entry && typeof entry === "object" ? displaySubmission(entry) : entry,
+    );
+  }
+  return trimmed;
+}
+
+function isPublished(assignment: CanvasAssignment): boolean {
+  return assignment.published === true || assignment.workflow_state === "published";
 }
 
 export function registerAssignmentTools(
@@ -57,7 +109,7 @@ export function registerAssignmentTools(
     "list_assignments",
     {
       description:
-        "List Canvas assignments in a course. include[]='submission' embeds the user's own (or `student_id`'s) submission. Anonymization wraps any embedded student data by default.",
+        "List Canvas assignments in a course, trimmed to scheduling/grading fields (descriptions omitted unless include_description=true; published_only=true filters to published). include[]='submission' embeds the user's own (or `student_id`'s) submission. Anonymization wraps any embedded student data by default.",
       inputSchema: LIST_ASSIGNMENTS_INPUT,
     },
     async (input) => {
@@ -65,6 +117,8 @@ export function registerAssignmentTools(
         course_identifier: string | number;
         student_id?: string | number;
         include?: string[];
+        include_description?: boolean;
+        published_only?: boolean;
         anonymous?: boolean;
       };
       return safeHandler("list_assignments", async () => {
@@ -73,15 +127,15 @@ export function registerAssignmentTools(
         if (args.include && args.include.length > 0) params["include[]"] = args.include;
         if (args.student_id !== undefined) params.user_id = args.student_id;
 
-        const { items: assignments, truncated, pages } = await canvas.getPaginated<CanvasAssignment>(
+        const { items: fetchedAssignments, truncated, pages } = await canvas.getPaginated<CanvasAssignment>(
           `/api/v1/courses/${courseId}/assignments`,
           { params },
         );
+        const assignments = args.published_only
+          ? fetchedAssignments.filter(isPublished)
+          : fetchedAssignments;
 
-        const wantedAnonymous = args.anonymous ?? true;
-        const deanonAllowed = isDeanonymizationAllowed();
-        const overridden = wantedAnonymous === false && !deanonAllowed;
-        const anonymous = overridden ? true : wantedAnonymous;
+        const { anonymous, overridden } = resolveAnonymous(args.anonymous);
         const hasSubmissionInclude =
           Array.isArray(args.include) &&
           args.include.some((token) => token === "submission" || token === "submission_history");
@@ -107,21 +161,24 @@ export function registerAssignmentTools(
               }),
             )
           : assignments;
+        const trimmedAssignments = finalAssignments.map((assignment) =>
+          displayAssignment(assignment, { includeDescription: args.include_description ?? false }),
+        );
 
         const warnings = overridden && hasSubmissionInclude ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
             course_id: courseId,
-            count: finalAssignments.length,
+            count: trimmedAssignments.length,
             pages,
             truncated,
             anonymized: anonymous && hasSubmissionInclude,
             ...(warnings ? { warnings } : {}),
-            assignments: finalAssignments,
+            assignments: trimmedAssignments,
           },
           {
             summary:
-              `Course ${courseId}: ${finalAssignments.length} assignment(s).` +
+              `Course ${courseId}: ${trimmedAssignments.length} assignment(s).` +
               (overridden && hasSubmissionInclude ? ` [override: ${DEANON_DENIED_NOTE}]` : ""),
           },
         );

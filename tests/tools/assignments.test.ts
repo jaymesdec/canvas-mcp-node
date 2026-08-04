@@ -51,6 +51,92 @@ describe("registerAssignmentTools", () => {
     expect(parseJsonResult(result).count).toBe(2);
   });
 
+  it("list_assignments returns the exact trimmed key set and omits description by default", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          {
+            id: 1,
+            name: "HW1",
+            description: "<p>Big HTML description</p>",
+            due_at: "2026-06-01T23:59:00Z",
+            unlock_at: null,
+            lock_at: null,
+            points_possible: 10,
+            published: true,
+            workflow_state: "published",
+            submission_types: ["online_upload"],
+            rubric: [{ id: "_1", description: "Clarity" }],
+            all_dates: [{ due_at: "2026-06-01T23:59:00Z" }],
+            html_url: "https://canvas.example.com/assignments/1",
+          },
+          { id: 2, name: "HW2", published: false, workflow_state: "unpublished" },
+        ],
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", { course_identifier: 60366 })) as ToolResponse;
+    const assignments = parseJsonResult(result).assignments as Array<Record<string, unknown>>;
+    expect(Object.keys(assignments[0]!).sort()).toEqual(
+      [
+        "id",
+        "name",
+        "due_at",
+        "unlock_at",
+        "lock_at",
+        "points_possible",
+        "published",
+        "workflow_state",
+        "submission_types",
+        "has_rubric",
+      ].sort(),
+    );
+    expect(assignments[0]?.has_rubric).toBe(true);
+    expect(assignments[1]?.has_rubric).toBe(false);
+    expect(JSON.stringify(parseJsonResult(result))).not.toContain("Big HTML description");
+  });
+
+  it("list_assignments includes description when include_description=true", async () => {
+    const { client } = buildMockCanvas([
+      { status: 200, data: [{ id: 1, name: "HW1", description: "<p>Big HTML description</p>" }] },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      include_description: true,
+    })) as ToolResponse;
+    const assignments = parseJsonResult(result).assignments as Array<Record<string, unknown>>;
+    expect(assignments[0]?.description).toBe("<p>Big HTML description</p>");
+  });
+
+  it("list_assignments published_only=true filters out unpublished assignments client-side", async () => {
+    const { client } = buildMockCanvas([
+      {
+        status: 200,
+        data: [
+          { id: 1, name: "HW1", published: true, workflow_state: "published" },
+          { id: 2, name: "Draft HW", published: false, workflow_state: "unpublished" },
+          { id: 3, name: "HW3", workflow_state: "published" },
+        ],
+      },
+    ]);
+    const harness = buildToolHarness();
+    registerAssignmentTools(harness.server as never, client, anonymizer);
+
+    const result = (await harness.call("list_assignments", {
+      course_identifier: 60366,
+      published_only: true,
+    })) as ToolResponse;
+    expect(parseJsonResult(result).count).toBe(2);
+    const assignments = parseJsonResult(result).assignments as Array<{ id: number }>;
+    expect(assignments.map((assignment) => assignment.id)).toEqual([1, 3]);
+  });
+
   it("list_assignments with include=submission anonymizes embedded student data when anonymous=true (default)", async () => {
     const { client } = buildMockCanvas([
       {

@@ -5,9 +5,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
-import { CanvasApiError } from "../types.js";
-import { DEANON_DENIED_NOTE, isDeanonymizationAllowed } from "../featureFlags.js";
-import { jsonResult, safeHandler } from "./toolHelpers.js";
+import { CanvasApiError, type CanvasUserLite } from "../types.js";
+import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
+import { jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
+import { buildStaffIdSet } from "./roster.js";
 
 const LIST_SUBMISSIONS_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
@@ -78,12 +79,111 @@ interface CanvasAssignmentRubric {
   rubric_settings?: Record<string, unknown> | null;
 }
 
-function resolveAnonymous(requested: boolean | undefined): { anonymous: boolean; overridden: boolean } {
-  const wantedAnonymous = requested ?? true;
-  if (wantedAnonymous === false && !isDeanonymizationAllowed()) {
-    return { anonymous: true, overridden: true };
+const SUBMISSION_DISPLAY_KEYS = [
+  "id",
+  "user_id",
+  "workflow_state",
+  "submitted_at",
+  "late",
+  "missing",
+  "grade",
+  "score",
+  "attempt",
+] as const;
+
+const SUBMISSION_USER_DISPLAY_KEYS = ["id", "name", "email"] as const;
+
+const ATTACHMENT_DISPLAY_KEYS = ["id", "filename", "display_name", "content_type", "size"] as const;
+
+const COMMENT_DISPLAY_KEYS = ["id", "author_id", "author_name", "comment", "created_at"] as const;
+
+function displaySubmissionComment(comment: Record<string, unknown>): Record<string, unknown> {
+  const trimmed = pickFields(comment, COMMENT_DISPLAY_KEYS);
+  if (trimmed.author_name === null && comment.author && typeof comment.author === "object") {
+    const author = comment.author as Record<string, unknown>;
+    trimmed.author_name = author.display_name ?? author.name ?? null;
   }
-  return { anonymous: wantedAnonymous, overridden: false };
+  if (comment.attempt !== undefined && comment.attempt !== null) trimmed.attempt = comment.attempt;
+  return trimmed;
+}
+
+/**
+ * Allowlist projection for a submission. MUST run on the anonymizer's output,
+ * never the raw Canvas payload (R3a: anonymize first, trim second).
+ */
+export function displaySubmission(submission: Record<string, unknown>): Record<string, unknown> {
+  const trimmed = pickFields(submission, SUBMISSION_DISPLAY_KEYS);
+  const user = submission.user;
+  trimmed.user =
+    user && typeof user === "object"
+      ? pickFields(user as Record<string, unknown>, SUBMISSION_USER_DISPLAY_KEYS)
+      : null;
+  const attachments = Array.isArray(submission.attachments) ? submission.attachments : [];
+  trimmed.attachments = attachments.map((attachment) =>
+    attachment && typeof attachment === "object"
+      ? pickFields(attachment as Record<string, unknown>, ATTACHMENT_DISPLAY_KEYS)
+      : attachment,
+  );
+  trimmed.rubric_assessment = submission.rubric_assessment ?? null;
+  const comments = Array.isArray(submission.submission_comments) ? submission.submission_comments : [];
+  trimmed.submission_comments = comments.map((comment) =>
+    comment && typeof comment === "object"
+      ? displaySubmissionComment(comment as Record<string, unknown>)
+      : comment,
+  );
+  return trimmed;
+}
+
+const UNKNOWN_COMMENTER_PLACEHOLDER = "Unknown commenter";
+
+/**
+ * Fail-closed comment-author pass. Real Canvas comment authors are UserDisplay
+ * objects with no role data, so classifyRole alone can't distinguish a teacher
+ * from a student — classify against the course's staff roster instead: staff
+ * ids keep real attribution, every other author is pseudonymized (author ids
+ * are never anonymized). Authors with no id at all get a fixed placeholder
+ * name — never verbatim, never a map allocation.
+ */
+export async function anonymizeNonStaffCommentAuthors(
+  anonymizer: Anonymizer,
+  courseId: number,
+  submission: Record<string, unknown>,
+  staffIds: Set<string>,
+): Promise<Record<string, unknown>> {
+  const comments = submission.submission_comments;
+  if (!Array.isArray(comments)) return submission;
+
+  const updated = await Promise.all(
+    comments.map(async (rawComment) => {
+      if (!rawComment || typeof rawComment !== "object") return rawComment;
+      const comment = rawComment as Record<string, unknown>;
+      const author = comment.author as CanvasUserLite | undefined;
+      const authorId = author?.id ?? comment.author_id;
+      if (authorId === undefined || authorId === null) {
+        if (comment.author_name === undefined && comment.author === undefined) return comment;
+        return { ...comment, author: null, author_name: UNKNOWN_COMMENTER_PLACEHOLDER };
+      }
+      if (staffIds.has(String(authorId))) return comment;
+
+      const sourceAuthor: CanvasUserLite = author ?? {
+        id: authorId as number | string,
+        name: typeof comment.author_name === "string" ? comment.author_name : undefined,
+      };
+      const anonymizedAuthor = await anonymizer.anonymizeUser(courseId, sourceAuthor, {
+        unknownRolePolicy: "student",
+      });
+      if (anonymizedAuthor === sourceAuthor && author) return comment;
+      const scrubbedAuthor: CanvasUserLite = { ...anonymizedAuthor };
+      if ("display_name" in scrubbedAuthor) scrubbedAuthor.display_name = anonymizedAuthor.name;
+      return {
+        ...comment,
+        author: scrubbedAuthor,
+        author_id: authorId,
+        author_name: anonymizedAuthor.name,
+      };
+    }),
+  );
+  return { ...submission, submission_comments: updated };
 }
 
 /** Build the include[] tokens list for list_submissions. */
@@ -120,6 +220,7 @@ export function registerSubmissionTools(
       return safeHandler("list_submissions", async () => {
         const courseId = await canvas.resolveCourseId(args.course_identifier);
         const { anonymous, overridden } = resolveAnonymous(args.anonymous);
+        const commentsIncluded = args.include_submission_comments ?? true;
         const params = {
           "include[]": buildSubmissionIncludeTokens(args),
         };
@@ -129,25 +230,40 @@ export function registerSubmissionTools(
           { params },
         );
 
-        const finalSubmissions = anonymous
-          ? ((await Promise.all(
-              submissions.map((submission) =>
-                anonymizer.anonymizeSubmission(courseId, submission as unknown as Record<string, unknown>),
+        let finalSubmissions: Record<string, unknown>[] = submissions as unknown as Record<
+          string,
+          unknown
+        >[];
+        if (anonymous) {
+          finalSubmissions = await Promise.all(
+            finalSubmissions.map((submission) => anonymizer.anonymizeSubmission(courseId, submission)),
+          );
+          const hasAnyComments = finalSubmissions.some(
+            (submission) =>
+              Array.isArray(submission.submission_comments) && submission.submission_comments.length > 0,
+          );
+          if (commentsIncluded && hasAnyComments) {
+            const staffIds = await buildStaffIdSet(canvas, courseId);
+            finalSubmissions = await Promise.all(
+              finalSubmissions.map((submission) =>
+                anonymizeNonStaffCommentAuthors(anonymizer, courseId, submission, staffIds),
               ),
-            )) as unknown as CanvasSubmission[])
-          : submissions;
+            );
+          }
+        }
+        const trimmedSubmissions = finalSubmissions.map(displaySubmission);
 
         const warnings = overridden ? [DEANON_DENIED_NOTE] : undefined;
         return jsonResult(
           {
             course_id: courseId,
             assignment_id: args.assignment_id,
-            count: finalSubmissions.length,
+            count: trimmedSubmissions.length,
             pages,
             truncated,
             anonymized: anonymous,
             ...(warnings ? { warnings } : {}),
-            submissions: finalSubmissions,
+            submissions: trimmedSubmissions,
           },
           {
             summary:
