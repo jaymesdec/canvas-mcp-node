@@ -19,6 +19,7 @@ import { registerAssignmentTools } from "./tools/assignments.js";
 import { registerRubricTools } from "./tools/rubrics.js";
 import { registerUserTools } from "./tools/users.js";
 import { registerSubmissionTools } from "./tools/submissions.js";
+import { registerDiscussionTools } from "./tools/discussions.js";
 import { registerGradingTools } from "./tools/grading.js";
 import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
   registerRubricTools(server, canvas);
   registerUserTools(server, canvas, anonymizer);
   registerSubmissionTools(server, canvas, anonymizer);
+  registerDiscussionTools(server, canvas, anonymizer);
   registerGradingTools(server, canvas);
   registerAnonymizationTools(server, canvas, anonymizer);
   registerCompetencyTools(server, schoolConfig);
