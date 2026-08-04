@@ -41,6 +41,36 @@ const CREATE_MODULE_INPUT = {
     .describe("ISO-8601 timestamp; module stays locked for students until this date."),
 };
 
+const UPDATE_MODULE_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  module_id: z.union([z.string(), z.number()]).describe("Numeric id of the module to update."),
+  name: z.string().optional().describe("New module name."),
+  position: z.number().int().positive().optional().describe("1-based position in the course's module list."),
+  prerequisite_module_ids: z
+    .array(z.union([z.string(), z.number()]))
+    .optional()
+    .describe("Numeric ids of modules that must be completed before this one unlocks."),
+  require_sequential_progress: z
+    .boolean()
+    .optional()
+    .describe("If true, students must complete each module item in order before the next unlocks."),
+  unlock_at: z
+    .string()
+    .optional()
+    .describe("ISO-8601 timestamp; module stays locked for students until this date."),
+};
+
+const DELETE_MODULE_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  module_id: z.union([z.string(), z.number()]).describe("Numeric id of the module to delete."),
+};
+
+const DELETE_MODULE_ITEM_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
+  module_id: z.union([z.string(), z.number()]).describe("Numeric id of the module containing the item."),
+  item_id: z.union([z.string(), z.number()]).describe("Numeric id of the module item to remove."),
+};
+
 const ADD_MODULE_ITEM_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   module_id: z.union([z.string(), z.number()]),
@@ -179,6 +209,96 @@ export function registerModuleTools(server: McpServer, canvas: CanvasClient): vo
         return jsonResult(
           { course_id: courseId, count: modules.length, pages, truncated, modules: modules.map(displayModule) },
           { summary: `Course ${courseId}: ${modules.length} module(s).` },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "update_module",
+    {
+      description:
+        "Update an existing Canvas module's settings — name, position, prerequisites, sequential progress, unlock date. Only the fields you pass are sent to Canvas; everything else is left untouched. Never changes publish state (per the cross-project never-auto-publish rule) — teacher publishes manually in Canvas. Bypasses the course-code cache so a rename mid-session can't misroute the write.",
+      inputSchema: UPDATE_MODULE_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof UPDATE_MODULE_INPUT>>;
+      return safeHandler("update_module", async () => {
+        const modulePayload: Record<string, unknown> = {};
+        if (args.name !== undefined) modulePayload.name = args.name;
+        if (args.position !== undefined) modulePayload.position = args.position;
+        if (args.prerequisite_module_ids !== undefined) {
+          modulePayload.prerequisite_module_ids = args.prerequisite_module_ids;
+        }
+        if (args.require_sequential_progress !== undefined) {
+          modulePayload.require_sequential_progress = args.require_sequential_progress;
+        }
+        if (args.unlock_at !== undefined) modulePayload.unlock_at = args.unlock_at;
+
+        if (Object.keys(modulePayload).length === 0) {
+          throw new Error(
+            "update_module: no fields to update. Pass at least one of name, position, prerequisite_module_ids, require_sequential_progress, unlock_at.",
+          );
+        }
+
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const updated = await canvas.put<CanvasModule>(
+          `/api/v1/courses/${courseId}/modules/${args.module_id}`,
+          { module: modulePayload },
+        );
+        return jsonResult(
+          { course_id: courseId, module: displayModule(updated) },
+          {
+            summary: `Updated module "${updated.name}" (id ${updated.id}) in course ${courseId}: ${Object.keys(modulePayload).join(", ")}.`,
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_module",
+    {
+      description:
+        "Permanently delete a Canvas module. Removes the module structure only — pages/assignments inside remain in the course. Bypasses the course-code cache (re-resolves every call) so a rename can't misroute the delete. Use for cleaning up wrong/duplicate modules.",
+      inputSchema: DELETE_MODULE_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof DELETE_MODULE_INPUT>>;
+      return safeHandler("delete_module", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const deleted = await canvas.del<CanvasModule>(
+          `/api/v1/courses/${courseId}/modules/${args.module_id}`,
+        );
+        return jsonResult(
+          { course_id: courseId, module: displayModule(deleted) },
+          {
+            summary: `Deleted module "${deleted.name}" (id ${deleted.id}) from course ${courseId}. Removed the module structure only — pages/assignments inside remain in the course.`,
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_module_item",
+    {
+      description:
+        "Remove a single item from a Canvas module. Deletes the module entry only — the underlying page/assignment/quiz remains in the course. Bypasses the course-code cache (re-resolves every call) so a rename can't misroute the delete.",
+      inputSchema: DELETE_MODULE_ITEM_INPUT,
+    },
+    async (input) => {
+      const args = input as z.infer<z.ZodObject<typeof DELETE_MODULE_ITEM_INPUT>>;
+      return safeHandler("delete_module_item", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+        const deleted = await canvas.del<CanvasModuleItem>(
+          `/api/v1/courses/${courseId}/modules/${args.module_id}/items/${args.item_id}`,
+        );
+        return jsonResult(
+          { course_id: courseId, module_id: args.module_id, item: deleted },
+          {
+            summary: `Deleted ${deleted.type} item "${deleted.title}" (id ${deleted.id}) from module ${args.module_id} in course ${courseId}. The underlying content remains in the course.`,
+          },
         );
       });
     },

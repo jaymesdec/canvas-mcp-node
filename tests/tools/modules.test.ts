@@ -4,11 +4,18 @@ import { buildMockCanvas, buildToolHarness, parseJsonResult, type ToolResponse }
 import { registerModuleTools } from "../../src/tools/modules.js";
 
 describe("registerModuleTools", () => {
-  it("registers create_module, list_modules, and add_module_item", () => {
+  it("registers the module tools", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerModuleTools(harness.server as never, client);
-    expect([...harness.tools.keys()].sort()).toEqual(["add_module_item", "create_module", "list_modules"]);
+    expect([...harness.tools.keys()].sort()).toEqual([
+      "add_module_item",
+      "create_module",
+      "delete_module",
+      "delete_module_item",
+      "list_modules",
+      "update_module",
+    ]);
   });
 
   describe("create_module", () => {
@@ -246,6 +253,136 @@ describe("registerModuleTools", () => {
     expect(result.isError).toBeFalsy();
     expect(requests.filter((request) => request.url === "/api/v1/courses")).toHaveLength(2);
     expect(requests.at(-1)?.url).toBe("/api/v1/courses/60366/modules/11/items");
+  });
+
+  describe("update_module", () => {
+    it("PUTs only the provided fields and never includes published anywhere in the payload", async () => {
+      const { client, requests } = buildMockCanvas([
+        {
+          status: 200,
+          data: {
+            id: 999,
+            name: "Module 4: Renamed",
+            position: 2,
+            workflow_state: "unpublished",
+            published: false,
+          },
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+
+      const result = (await harness.call("update_module", {
+        course_identifier: 60366,
+        module_id: 999,
+        name: "Module 4: Renamed",
+        position: 2,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("PUT");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules/999");
+      const body = requests[0]?.data as { module: Record<string, unknown> };
+      expect(body.module).toEqual({ name: "Module 4: Renamed", position: 2 });
+      expect(JSON.stringify(body)).not.toContain("published");
+      const payload = parseJsonResult(result);
+      expect((payload.module as { name?: string }).name).toBe("Module 4: Renamed");
+    });
+
+    it("threads prerequisite_module_ids, require_sequential_progress, and unlock_at when provided", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 999, name: "Module 4", workflow_state: "unpublished" } },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+      await harness.call("update_module", {
+        course_identifier: 60366,
+        module_id: 999,
+        prerequisite_module_ids: [998],
+        require_sequential_progress: true,
+        unlock_at: "2026-09-01T08:00:00Z",
+      });
+      const body = requests[0]?.data as { module: Record<string, unknown> };
+      expect(body.module).toEqual({
+        prerequisite_module_ids: [998],
+        require_sequential_progress: true,
+        unlock_at: "2026-09-01T08:00:00Z",
+      });
+      expect(JSON.stringify(body)).not.toContain("published");
+    });
+
+    it("returns a structured error when no updatable fields are provided", async () => {
+      const { client, requests } = buildMockCanvas([]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+      const result = (await harness.call("update_module", {
+        course_identifier: 60366,
+        module_id: 999,
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/no fields to update/);
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  describe("delete_module", () => {
+    it("DELETEs the module and names it in a summary stating content survives", async () => {
+      const { client, requests } = buildMockCanvas([
+        {
+          status: 200,
+          data: { id: 999, name: "Module 4: Duplicate", position: 4, workflow_state: "unpublished" },
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+
+      const result = (await harness.call("delete_module", {
+        course_identifier: 60366,
+        module_id: 999,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("DELETE");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules/999");
+      const summaryText = result.content?.[0]?.text ?? "";
+      expect(summaryText).toContain('Deleted module "Module 4: Duplicate"');
+      expect(summaryText).toContain("pages/assignments inside remain in the course");
+    });
+
+    it("surfaces a 404 for a nonexistent module with tool context", async () => {
+      const { client } = buildMockCanvas([
+        { status: 404, data: { errors: [{ message: "The specified resource does not exist." }] } },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+      const result = (await harness.call("delete_module", {
+        course_identifier: 60366,
+        module_id: 424242,
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/^delete_module: /);
+      expect(result.content?.[0]?.text).toContain("404");
+    });
+  });
+
+  describe("delete_module_item", () => {
+    it("DELETEs the item at the nested items path and names item and module in the summary", async () => {
+      const { client, requests } = buildMockCanvas([
+        { status: 200, data: { id: 555, module_id: 11, position: 1, title: "Lesson Notes", type: "Page" } },
+      ]);
+      const harness = buildToolHarness();
+      registerModuleTools(harness.server as never, client);
+
+      const result = (await harness.call("delete_module_item", {
+        course_identifier: 60366,
+        module_id: 11,
+        item_id: 555,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.method).toBe("DELETE");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/modules/11/items/555");
+      const summaryText = result.content?.[0]?.text ?? "";
+      expect(summaryText).toContain('"Lesson Notes"');
+      expect(summaryText).toContain("module 11");
+    });
   });
 
   it("add_module_item for Page without content_id returns a structured error", async () => {
