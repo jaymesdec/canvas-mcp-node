@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
-import { applyPageTemplate, computeAcademicWeek, type SchoolConfig } from "../schoolConfig.js";
+import { applyPageTemplate, explainAcademicWeek, type SchoolConfig } from "../schoolConfig.js";
 import { deriveCourseUrl, jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
 import { anonymizeNonStaffCommentAuthors, displaySubmission } from "./submissions.js";
@@ -363,12 +363,11 @@ interface SuggestedTitleVars {
 function composeSuggestedTitle(
   titleFormat: string,
   vars: SuggestedTitleVars,
+  weekWarning: string | null,
 ): { title: string; warnings: string[] } {
   const warnings: string[] = [];
-  if (vars.week === null && titleFormat.includes("{week}")) {
-    warnings.push(
-      'Could not resolve the academic week for the suggested title (the date falls on a school break or outside the configured calendar, or no calendar is configured) — substituted "?". Confirm the week number with the teacher.',
-    );
+  if (vars.week === null && titleFormat.includes("{week}") && weekWarning !== null) {
+    warnings.push(weekWarning);
   }
   const substitutions: Record<string, string> = {
     type: vars.type,
@@ -385,10 +384,46 @@ function composeSuggestedTitle(
   return { title, warnings };
 }
 
-function assessmentWeekFor(dueAt: string | undefined, schoolConfig: SchoolConfig | null): number | null {
+interface AssessmentWeekResolution {
+  week: number | null;
+  warning: string | null;
+}
+
+// The warning must state the EXACT reason the week is unknown — an ambiguous
+// message here caused models to claim no calendar was loaded and hand teachers
+// raw-math week estimates that ignore school breaks.
+function assessmentWeekFor(dueAt: string | undefined, schoolConfig: SchoolConfig | null): AssessmentWeekResolution {
   const date = dueAt !== undefined ? new Date(dueAt) : new Date();
-  if (Number.isNaN(date.getTime())) return null;
-  return computeAcademicWeek(date, schoolConfig?.academicCalendar);
+  if (Number.isNaN(date.getTime())) {
+    return { week: null, warning: `The due date "${dueAt}" could not be parsed — substituted "?" for the week in the suggested title. Confirm the due date and week number with the teacher.` };
+  }
+  const explanation = explainAcademicWeek(date, schoolConfig?.academicCalendar);
+  if (explanation.reason === "ok") return { week: explanation.week, warning: null };
+
+  const dateLabel = date.toISOString().slice(0, 10);
+  const subject = dueAt !== undefined ? `The due date ${dateLabel}` : `Today (${dateLabel}, no due date was provided)`;
+  let warning: string;
+  switch (explanation.reason) {
+    case "break":
+      warning =
+        `${subject} falls during a SCHOOL BREAK — between Week ${explanation.previous!.week} (ends ${explanation.previous!.end}) and Week ${explanation.next!.week} (begins ${explanation.next!.start}). ` +
+        `Substituted "?" in the suggested title. Tell the teacher the date is during a break (it may be unintended); if intended, ask which adjacent week number to use. Do NOT estimate a week number yourself.`;
+      break;
+    case "before_year":
+      warning =
+        `${subject} is before the school year's first configured week (Week ${explanation.next!.week} begins ${explanation.next!.start}). ` +
+        `Substituted "?" in the suggested title — confirm the intended date and week with the teacher. Do NOT estimate a week number yourself.`;
+      break;
+    case "after_year":
+      warning =
+        `${subject} is after the school year's last configured week (Week ${explanation.previous!.week} ends ${explanation.previous!.end}). ` +
+        `Substituted "?" in the suggested title — confirm the intended date and week with the teacher. Do NOT estimate a week number yourself.`;
+      break;
+    default:
+      warning =
+        `No academic calendar is configured, so the week number is unknown — substituted "?" in the suggested title. Ask the teacher for the week number; do NOT estimate one yourself.`;
+  }
+  return { week: null, warning };
 }
 
 function assertAssessmentFlagsProvided(
@@ -651,6 +686,7 @@ export function registerAssignmentTools(
         "The description is wrapped in the school's 'default' page template automatically; pass template='assessment' for Franklin assessments — discover slot names and the ASMT title format via list_page_templates — or template='none' to skip wrapping. " +
         "template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag), fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag), and assignment_group (the Canvas assignment group — its name is the {type} in the assessment title and its group_weight is the {percent}): ask the teacher all three, never assume; the weight then comes from Canvas, not the teacher's memory. " +
         "The response returns suggested_title composed from the school's assessment title format — propose it to the teacher and let them adjust. " +
+        "Conduct: ask the assessment questions in plain language (never surface parameter names like final_asmt to the teacher); do NOT offer to skip the school template — template='none' exists only for when the teacher explicitly asks for an untemplated assignment; never ask whether to create as a draft — assignments are ALWAYS created unpublished. " +
         "assignment_group also works on non-assessment assignments as a plain group placement. " +
         "Multi-slot templates need content via slots={...}; include_sections / omit_sections override the template's default optional-section state per-call. " +
         SUBMISSION_TYPES_DESCRIPTION,
@@ -736,14 +772,19 @@ export function registerAssignmentTools(
           responsePayload.resolved_percent = groupResolution!.percent;
           const titleFormat = schoolConfig?.pageTemplates?.[ASSESSMENT_TEMPLATE_NAME]?.titleFormat;
           if (titleFormat !== undefined) {
-            const composed = composeSuggestedTitle(titleFormat, {
-              type: groupResolution!.group.name ?? "",
-              name: args.name,
-              week: assessmentWeekFor(args.due_at, schoolConfig),
-              percent: groupResolution!.percent!,
-              fair_flag: fairAsmt ? "FAIR " : "",
-              final_flag: finalAsmt ? "FINAL " : "",
-            });
+            const weekResolution = assessmentWeekFor(args.due_at, schoolConfig);
+            const composed = composeSuggestedTitle(
+              titleFormat,
+              {
+                type: groupResolution!.group.name ?? "",
+                name: args.name,
+                week: weekResolution.week,
+                percent: groupResolution!.percent!,
+                fair_flag: fairAsmt ? "FAIR " : "",
+                final_flag: finalAsmt ? "FINAL " : "",
+              },
+              weekResolution.warning,
+            );
             responsePayload.suggested_title = composed.title;
             warnings.push(...composed.warnings);
           }
@@ -769,6 +810,7 @@ export function registerAssignmentTools(
         "Two modes: (1) Simple field update — provided fields (description included) are sent verbatim. " +
         "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the description from the school template (same machinery as create_assignment; pass template='assessment' for Franklin assessments — discover slot names via list_page_templates). " +
         "Re-applying template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag), fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag), and assignment_group (the Canvas assignment group — its name is the {type} in the assessment title and its group_weight is the {percent}): ask the teacher, never assume; the response returns suggested_title composed from the school's title format — propose it to the teacher and let them adjust. " +
+        "Conduct: ask in plain language (never surface parameter names to the teacher) and do NOT offer to skip the school template — template='none' exists only for when the teacher explicitly asks. " +
         "In simple mode, assignment_group works as a plain regroup (sets assignment_group_id; numeric id or exact case-insensitive group name). " +
         "When re-applying a template, pass ALL slots you want in the result, not just the ones that changed — the description is rebuilt from scratch. Pass template='none' to force simple mode. " +
         "Caveat: Canvas silently ignores submission_types changes once an assignment has student submissions — the response is checked and a warning is returned when that happens. " +
@@ -863,14 +905,19 @@ export function registerAssignmentTools(
           resolvedPercent = groupResolution!.percent;
           const titleFormat = schoolConfig?.pageTemplates?.[ASSESSMENT_TEMPLATE_NAME]?.titleFormat;
           if (titleFormat !== undefined) {
-            const composed = composeSuggestedTitle(titleFormat, {
-              type: groupResolution!.group.name ?? "",
-              name: resolvedName ?? updated.name ?? "",
-              week: assessmentWeekFor(args.due_at, schoolConfig),
-              percent: groupResolution!.percent!,
-              fair_flag: fairAsmt ? "FAIR " : "",
-              final_flag: finalAsmt ? "FINAL " : "",
-            });
+            const weekResolution = assessmentWeekFor(args.due_at, schoolConfig);
+            const composed = composeSuggestedTitle(
+              titleFormat,
+              {
+                type: groupResolution!.group.name ?? "",
+                name: resolvedName ?? updated.name ?? "",
+                week: weekResolution.week,
+                percent: groupResolution!.percent!,
+                fair_flag: fairAsmt ? "FAIR " : "",
+                final_flag: finalAsmt ? "FINAL " : "",
+              },
+              weekResolution.warning,
+            );
             suggestedTitle = composed.title;
             warnings.push(...composed.warnings);
           }

@@ -43,7 +43,8 @@ const titleFormatConfig: SchoolConfig = {
     weeks: [
       { week: 27, start: "2027-03-01" },
       { week: 28, start: "2027-03-08" },
-      { week: 29, start: "2027-03-15" },
+      // deliberate gap 2027-03-15..21 — models a school break
+      { week: 29, start: "2027-03-22" },
     ],
   },
   pageTemplates: {
@@ -915,7 +916,37 @@ describe("registerAssignmentTools", () => {
       const payload = parseJsonResult(result);
       expect(payload.suggested_title).toContain("[Week ?]");
       const warnings = payload.warnings as string[];
-      expect(warnings.some((warning) => warning.includes("academic week"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("after the school year's last configured week"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("Week 29 ends 2027-03-28"))).toBe(true);
+    });
+
+    it("names the surrounding weeks when the due date falls during a school break", async () => {
+      const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 724, name: "Break ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, titleFormatConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Break ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: "Project",
+        due_at: "2027-03-17T23:59:00Z",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title).toContain("[Week ?]");
+      const warnings = payload.warnings as string[];
+      const breakWarning = warnings.find((warning) => warning.includes("SCHOOL BREAK"));
+      expect(breakWarning).toBeDefined();
+      expect(breakWarning).toContain("Week 28 (ends 2027-03-14)");
+      expect(breakWarning).toContain("Week 29 (begins 2027-03-22)");
+      expect(breakWarning).toContain("Do NOT estimate a week number yourself");
     });
 
     it("requires asmt_percent when the group has no usable weight, then uses it in the title", async () => {

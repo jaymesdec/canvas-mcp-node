@@ -168,6 +168,70 @@ export function computeAcademicWeek(
   return Math.max(1, Math.min(week, max));
 }
 
+export interface AcademicWeekExplanation {
+  week: number | null;
+  reason: "ok" | "break" | "before_year" | "after_year" | "no_calendar";
+  /** Nearest configured week before the date (break/after_year cases). `end` is that week's last day. */
+  previous?: { week: number; end: string };
+  /** Nearest configured week after the date (break/before_year cases). */
+  next?: { week: number; start: string };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function isoDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * Like computeAcademicWeek, but when no week matches it says WHY — a date on a
+ * school break is materially different from a missing calendar, and collapsing
+ * them into one message invites the model to guess a week number on the
+ * teacher's behalf (e.g., raw-math estimates during vacations).
+ */
+export function explainAcademicWeek(
+  date: Date,
+  calendar: NonNullable<SchoolConfig["academicCalendar"]> | undefined,
+): AcademicWeekExplanation {
+  const week = computeAcademicWeek(date, calendar);
+  if (week !== null) return { week, reason: "ok" };
+
+  const weeks = calendar?.weeks;
+  if (!weeks || weeks.length === 0) return { week: null, reason: "no_calendar" };
+
+  const sorted = [...weeks].sort((a, b) => a.start.localeCompare(b.start));
+  const dateMs = date.getTime();
+  const firstEntry = sorted[0]!;
+  const firstStartMs = Date.parse(`${firstEntry.start}T00:00:00Z`);
+  if (dateMs < firstStartMs) {
+    return { week: null, reason: "before_year", next: { week: firstEntry.week, start: firstEntry.start } };
+  }
+  const lastEntry = sorted[sorted.length - 1]!;
+  const lastEndMs = Date.parse(`${lastEntry.start}T00:00:00Z`) + 7 * DAY_MS;
+  if (dateMs >= lastEndMs) {
+    return { week: null, reason: "after_year", previous: { week: lastEntry.week, end: isoDate(lastEndMs - DAY_MS) } };
+  }
+
+  let previousEntry = firstEntry;
+  let nextEntry: (typeof sorted)[number] | undefined;
+  for (const entry of sorted) {
+    const startMs = Date.parse(`${entry.start}T00:00:00Z`);
+    if (startMs <= dateMs) {
+      previousEntry = entry;
+    } else {
+      nextEntry = entry;
+      break;
+    }
+  }
+  const previousEndMs = Date.parse(`${previousEntry.start}T00:00:00Z`) + 6 * DAY_MS;
+  return {
+    week: null,
+    reason: "break",
+    previous: { week: previousEntry.week, end: isoDate(previousEndMs) },
+    ...(nextEntry ? { next: { week: nextEntry.week, start: nextEntry.start } } : {}),
+  };
+}
+
 export type Competency = z.infer<typeof CompetencySchema>;
 export type CompetencyFramework = z.infer<typeof CompetencyFrameworkSchema>;
 export type PageTemplate = z.infer<typeof PageTemplateSchema>;

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { computeAcademicWeek, loadSchoolConfig, type SchoolConfig } from "../src/schoolConfig.js";
+import { computeAcademicWeek, explainAcademicWeek, loadSchoolConfig, type SchoolConfig } from "../src/schoolConfig.js";
 
 let tmpRoot: string;
 let warnings: string[];
@@ -309,5 +309,48 @@ describe("computeAcademicWeek with the franklin week table", () => {
     // The naive math would return a week number for 2027-06-20; the table must win.
     expect(franklinCalendar.yearStart).toBe("2026-08-24");
     expect(computeAcademicWeek(new Date("2027-06-20T12:00:00Z"), franklinCalendar)).toBeNull();
+  });
+});
+
+describe("explainAcademicWeek", () => {
+  let franklinCalendar: NonNullable<SchoolConfig["academicCalendar"]>;
+
+  beforeAll(async () => {
+    const franklin = await loadSchoolConfig({
+      configPath: path.resolve("configs/franklin.json"),
+    });
+    franklinCalendar = franklin!.academicCalendar!;
+  });
+
+  it("returns ok with the week for an in-week date", () => {
+    const explanation = explainAcademicWeek(new Date("2027-04-15T12:00:00Z"), franklinCalendar);
+    expect(explanation).toEqual({ week: 28, reason: "ok" });
+  });
+
+  it("identifies the spring-break gap with both surrounding weeks", () => {
+    const explanation = explainAcademicWeek(new Date("2027-03-15T12:00:00Z"), franklinCalendar);
+    expect(explanation.reason).toBe("break");
+    expect(explanation.week).toBeNull();
+    expect(explanation.previous).toEqual({ week: 25, end: "2027-03-14" });
+    expect(explanation.next).toEqual({ week: 26, start: "2027-03-29" });
+  });
+
+  it("identifies dates before the year with the first week", () => {
+    const explanation = explainAcademicWeek(new Date("2026-08-01T12:00:00Z"), franklinCalendar);
+    expect(explanation.reason).toBe("before_year");
+    expect(explanation.next).toEqual({ week: 0, start: "2026-08-24" });
+  });
+
+  it("identifies dates after the year with the last week", () => {
+    const explanation = explainAcademicWeek(new Date("2027-07-01T12:00:00Z"), franklinCalendar);
+    expect(explanation.reason).toBe("after_year");
+    expect(explanation.previous).toEqual({ week: 36, end: "2027-06-13" });
+  });
+
+  it("reports no_calendar when neither table nor yearStart exists", () => {
+    expect(explainAcademicWeek(new Date("2027-04-15T12:00:00Z"), undefined)).toEqual({
+      week: null,
+      reason: "no_calendar",
+    });
   });
 });
