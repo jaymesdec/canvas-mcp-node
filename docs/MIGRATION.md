@@ -333,3 +333,10 @@ Deliberately excluded: **`delete_assignment` and `delete_quiz` do not exist** �
 
 - **`academicCalendar.weeks` table.** School configs can now carry the school's published week table (`[{ week, start }]`, one entry per official week — Week 0 and vacation gaps supported). When present, `computeAcademicWeek` / `get_school_info` use table lookup instead of the weeks-since-yearStart approximation, which had drifted ~6 weeks off Franklin's official numbering by spring. `configs/franklin.json` ships the verified 2026-27 table (Week 0–36); re-import yearly with `node scripts/import-week-calendar.mjs <ics-file-or-url> [config-path]`.
 - **`get_school_info` surfaces `week_source` and `on_break`.** `academic_calendar.week_source` is `"calendar_table"` when the table drives the number (else `"computed"`). During a school break inside the year, `current_week` is `null`, `on_break: true` is set, and the summary notes "school is on break this week" — skills should not guess a week number for break dates.
+
+## v0.4.4 — assessment `{type}` and `{percent}` come from Canvas assignment groups
+
+- New tool `list_assignment_groups(course_identifier)` — groups with `group_weight` plus the course's `apply_assignment_group_weights` flag.
+- `create_assignment` / `update_assignment` gain `assignment_group` (id or exact case-insensitive name) and `asmt_percent`. `template: 'assessment'` now also **requires `assignment_group`** — the group name is the title's `{type}` and its Canvas `group_weight` is the `{percent}`, so the model asks the teacher which group and takes the percent from Canvas, not from memory. Groups with no usable weight fall back to requiring `asmt_percent`.
+- Assessment responses now include a fully composed `suggested_title` built from the school config's `titleFormat` — group name, assignment name, due-date week (from the calendar table; `?` + warning on breaks), percent, and FAIR/FINAL flags. Skills that compose assessment titles themselves can switch to proposing `suggested_title` instead.
+- `assignment_group` also works on non-assessment assignments as a plain group placement (create and update).

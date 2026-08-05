@@ -29,6 +29,35 @@ const templatedConfig: SchoolConfig = {
   },
 };
 
+const assignmentGroupsResponse = {
+  status: 200,
+  data: [
+    { id: 101, name: "Project", position: 1, group_weight: 15, rules: {} },
+    { id: 202, name: "Homework", position: 2, group_weight: 25, rules: {} },
+  ],
+};
+
+const titleFormatConfig: SchoolConfig = {
+  schoolName: "Test School",
+  academicCalendar: {
+    weeks: [
+      { week: 27, start: "2027-03-01" },
+      { week: 28, start: "2027-03-08" },
+      { week: 29, start: "2027-03-15" },
+    ],
+  },
+  pageTemplates: {
+    assessment: {
+      description: "Assessment layout",
+      titleFormat: "{type}: {name} [Week {week}] {percent}% {fair_flag}{final_flag}ASMT",
+      html:
+        "<article class=\"assessment\"><h2>{{title}}</h2>" +
+        "<section class=\"req\">{{slot:requirements}}</section></article>",
+      slots: { requirements: { description: "What students must do" } },
+    },
+  },
+};
+
 async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "canvas-anon-assign-"));
 }
@@ -45,7 +74,7 @@ afterEach(async () => {
 });
 
 describe("registerAssignmentTools", () => {
-  it("registers all five assignment tools", () => {
+  it("registers all six assignment tools", () => {
     const { client } = buildMockCanvas([]);
     const harness = buildToolHarness();
     registerAssignmentTools(harness.server as never, client, anonymizer);
@@ -53,6 +82,7 @@ describe("registerAssignmentTools", () => {
       "create_assignment",
       "get_assignment_details",
       "get_assignment_rubric_details",
+      "list_assignment_groups",
       "list_assignments",
       "update_assignment",
     ]);
@@ -411,6 +441,7 @@ describe("registerAssignmentTools", () => {
 
     it("create_assignment with template='assessment' substitutes slot content", async () => {
       const { client, requests } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 701, name: "Watershed ASMT", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -422,19 +453,25 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: false,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: {
           requirements: "<p>20 multiple-choice questions.</p>",
           grading: "<p>1 point each.</p>",
         },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      const payload = (requests[0]?.data as { assignment: { description: string } }).assignment;
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignment_groups");
+      const payload = (requests[1]?.data as { assignment: { description: string; assignment_group_id: number } })
+        .assignment;
+      expect(payload.assignment_group_id).toBe(101);
       expect(payload.description).toContain("<h2>Watershed ASMT</h2>");
       expect(payload.description).toContain('<section class="req"><p>20 multiple-choice questions.</p></section>');
       expect(payload.description).toContain('<section class="grading"><p>1 point each.</p></section>');
       expect(payload.description).not.toContain("{{slot:");
       expect(parseJsonResult(result).template_applied).toBe("assessment");
       expect(parseJsonResult(result).suggested_title_flags).toBe("");
+      expect(parseJsonResult(result).resolved_percent).toBe(15);
+      expect(parseJsonResult(result)).not.toHaveProperty("suggested_title");
       expect(parseJsonResult(result)).not.toHaveProperty("warnings");
     });
 
@@ -509,8 +546,9 @@ describe("registerAssignmentTools", () => {
       expect(parseJsonResult(result)).not.toHaveProperty("template_applied");
     });
 
-    it("update_assignment with template+slots rebuilds the description (name provided, no extra GET)", async () => {
+    it("update_assignment with template+slots rebuilds the description (name provided, no extra assignment GET)", async () => {
       const { client, requests } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 555, name: "Watershed ASMT v2", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -523,15 +561,17 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: false,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: {
           requirements: "<p>Updated requirements.</p>",
           grading: "<p>Updated grading.</p>",
         },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.method).toBe("PUT");
-      const payload = (requests[0]?.data as { assignment: { name: string; description: string } }).assignment;
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignment_groups");
+      expect(requests[1]?.method).toBe("PUT");
+      const payload = (requests[1]?.data as { assignment: { name: string; description: string } }).assignment;
       expect(payload.name).toBe("Watershed ASMT v2");
       expect(payload.description).toContain("<h2>Watershed ASMT v2</h2>");
       expect(payload.description).toContain("<p>Updated requirements.</p>");
@@ -541,6 +581,7 @@ describe("registerAssignmentTools", () => {
 
     it("update_assignment fetches the existing name for {{title}} when name is not being updated", async () => {
       const { client, requests } = buildMockCanvas([
+        assignmentGroupsResponse,
         // GET assignment to resolve the name for the {{title}} token
         { status: 200, data: { id: 555, name: "Existing ASMT Name", published: false } },
         // PUT response
@@ -555,11 +596,13 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: false,
         fair_asmt: false,
+        assignment_group: 101,
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
-      expect(requests[0]?.method).toBe("GET");
-      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignments/555");
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignment_groups");
+      expect(requests[1]?.method).toBe("GET");
+      expect(requests[1]?.url).toBe("/api/v1/courses/60366/assignments/555");
       const putRequest = requests.at(-1);
       expect(putRequest?.method).toBe("PUT");
       const payload = (putRequest?.data as { assignment: Record<string, unknown> }).assignment;
@@ -607,6 +650,7 @@ describe("registerAssignmentTools", () => {
 
     it("create_assignment with both flags true suggests 'FAIR FINAL ' and warns when the name lacks both tags", async () => {
       const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 710, name: "Watershed ASMT", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -618,6 +662,7 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: true,
         fair_asmt: true,
+        assignment_group: "Project",
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -631,6 +676,7 @@ describe("registerAssignmentTools", () => {
 
     it("create_assignment warns when the assessment name is missing the ASMT suffix", async () => {
       const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 711, name: "Watershed Test", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -642,6 +688,7 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: false,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -652,6 +699,7 @@ describe("registerAssignmentTools", () => {
 
     it("create_assignment warns when fair_asmt is false but the name contains FAIR", async () => {
       const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 712, name: "Unit 1 FAIR ASMT", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -663,6 +711,7 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: false,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -674,6 +723,7 @@ describe("registerAssignmentTools", () => {
 
     it("create_assignment with a correctly tagged FINAL-only title has no warnings and suggests 'FINAL '", async () => {
       const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 713, name: "Quiz: Watershed [Week 12] 10% FINAL ASMT", published: false } },
       ]);
       const harness = buildToolHarness();
@@ -685,6 +735,7 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: true,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -712,6 +763,7 @@ describe("registerAssignmentTools", () => {
 
     it("update_assignment checks the existing name against the flags on update-without-rename", async () => {
       const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
         { status: 200, data: { id: 555, name: "Project: Watershed [Week 3] 20% ASMT", published: false } },
         { status: 200, data: { id: 555, name: "Project: Watershed [Week 3] 20% ASMT", published: false } },
       ]);
@@ -724,6 +776,7 @@ describe("registerAssignmentTools", () => {
         template: "assessment",
         final_asmt: true,
         fair_asmt: false,
+        assignment_group: "Project",
         slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
       })) as ToolResponse;
       expect(result.isError).toBeFalsy();
@@ -749,6 +802,215 @@ describe("registerAssignmentTools", () => {
       expect(result.isError).toBeFalsy();
       expect(parseJsonResult(result)).not.toHaveProperty("suggested_title_flags");
       expect(parseJsonResult(result)).not.toHaveProperty("warnings");
+    });
+  });
+
+  describe("assignment groups and suggested_title", () => {
+    it("list_assignment_groups returns trimmed groups and notes when weights are not applied", async () => {
+      const { client, requests } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 60366, name: "DTC 9", apply_assignment_group_weights: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("list_assignment_groups", {
+        course_identifier: 60366,
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.url).toBe("/api/v1/courses/60366/assignment_groups");
+      const payload = parseJsonResult(result);
+      expect(payload.apply_assignment_group_weights).toBe(false);
+      expect(payload.assignment_groups).toEqual([
+        { id: 101, name: "Project", position: 1, group_weight: 15 },
+        { id: 202, name: "Homework", position: 2, group_weight: 25 },
+      ]);
+      expect(result.content?.[0]?.text).toContain("NOT applied");
+    });
+
+    it("create_assignment fails closed when template='assessment' has no assignment_group, listing the course's groups", async () => {
+      const { client, requests } = buildMockCanvas([assignmentGroupsResponse]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        final_asmt: true,
+        fair_asmt: false,
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("assignment_group");
+      expect(result.content?.[0]?.text).toContain('"Project" (id 101, weight 15%)');
+      expect(result.content?.[0]?.text).toContain('"Homework" (id 202, weight 25%)');
+      expect(requests).toHaveLength(1);
+    });
+
+    it("create_assignment rejects an unknown assignment_group with the group list and zero writes", async () => {
+      const { client, requests } = buildMockCanvas([assignmentGroupsResponse]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Watershed ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: "Portfolio",
+        slots: { requirements: "<p>r</p>", grading: "<p>g</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("does not match any assignment group");
+      expect(result.content?.[0]?.text).toContain('"Project" (id 101');
+      expect(requests).toHaveLength(1);
+    });
+
+    it("composes suggested_title from the titleFormat with group name, group weight, and due-date week", async () => {
+      const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 720, name: "MCP Server Build", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, titleFormatConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "MCP Server Build",
+        template: "assessment",
+        final_asmt: true,
+        fair_asmt: true,
+        assignment_group: "project",
+        due_at: "2027-03-10T23:59:00Z",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title).toBe("Project: MCP Server Build [Week 28] 15% FAIR FINAL ASMT");
+      expect(payload.resolved_percent).toBe(15);
+      expect(payload.assignment_group).toEqual({ id: 101, name: "Project", group_weight: 15 });
+    });
+
+    it("substitutes '?' for the week and warns when the due date falls outside the calendar", async () => {
+      const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 721, name: "Summer ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, titleFormatConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Summer ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: 101,
+        due_at: "2027-07-01T23:59:00Z",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.suggested_title).toContain("[Week ?]");
+      const warnings = payload.warnings as string[];
+      expect(warnings.some((warning) => warning.includes("academic week"))).toBe(true);
+    });
+
+    it("requires asmt_percent when the group has no usable weight, then uses it in the title", async () => {
+      const weightlessGroups = {
+        status: 200,
+        data: [{ id: 301, name: "Unweighted", position: 1, group_weight: 0, rules: {} }],
+      };
+      const { client, requests } = buildMockCanvas([weightlessGroups]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, titleFormatConfig);
+
+      const failed = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Weightless ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: "Unweighted",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(failed.isError).toBe(true);
+      expect(failed.content?.[0]?.text).toContain("asmt_percent");
+      expect(requests).toHaveLength(1);
+
+      const { client: client2 } = buildMockCanvas([
+        weightlessGroups,
+        { status: 200, data: { id: 722, name: "Weightless ASMT", published: false } },
+      ]);
+      const harness2 = buildToolHarness();
+      registerAssignmentTools(harness2.server as never, client2, anonymizer, titleFormatConfig);
+
+      const result = (await harness2.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Weightless ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: "Unweighted",
+        asmt_percent: 12,
+        due_at: "2027-03-10T23:59:00Z",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.resolved_percent).toBe(12);
+      expect(payload.suggested_title).toContain("12%");
+    });
+
+    it("warns when asmt_percent disagrees with the Canvas group weight (Canvas wins)", async () => {
+      const { client } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 723, name: "Mismatch ASMT", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, titleFormatConfig);
+
+      const result = (await harness.call("create_assignment", {
+        course_identifier: 60366,
+        name: "Mismatch ASMT",
+        template: "assessment",
+        final_asmt: false,
+        fair_asmt: false,
+        assignment_group: "Project",
+        asmt_percent: 40,
+        due_at: "2027-03-10T23:59:00Z",
+        slots: { requirements: "<p>r</p>" },
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const payload = parseJsonResult(result);
+      expect(payload.resolved_percent).toBe(15);
+      expect(payload.suggested_title).toContain("15%");
+      const warnings = payload.warnings as string[];
+      expect(warnings.some((warning) => warning.includes("group_weight 15"))).toBe(true);
+    });
+
+    it("update_assignment in simple mode regroups via assignment_group without template machinery", async () => {
+      const { client, requests } = buildMockCanvas([
+        assignmentGroupsResponse,
+        { status: 200, data: { id: 555, name: "HW1", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerAssignmentTools(harness.server as never, client, anonymizer, templatedConfig);
+
+      const result = (await harness.call("update_assignment", {
+        course_identifier: 60366,
+        assignment_id: 555,
+        assignment_group: "homework",
+      })) as ToolResponse;
+      expect(result.isError).toBeFalsy();
+      const putRequest = requests.at(-1);
+      expect(putRequest?.method).toBe("PUT");
+      expect((putRequest?.data as { assignment: Record<string, unknown> }).assignment).toEqual({
+        assignment_group_id: 202,
+      });
+      expect(parseJsonResult(result)).not.toHaveProperty("suggested_title");
     });
   });
 

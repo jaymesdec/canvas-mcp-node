@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CanvasClient } from "../canvasClient.js";
 import type { Anonymizer } from "../anonymizer.js";
-import { applyPageTemplate, type SchoolConfig } from "../schoolConfig.js";
+import { applyPageTemplate, computeAcademicWeek, type SchoolConfig } from "../schoolConfig.js";
 import { deriveCourseUrl, jsonResult, pickFields, safeHandler } from "./toolHelpers.js";
 import { DEANON_DENIED_NOTE, resolveAnonymous } from "../featureFlags.js";
 import { anonymizeNonStaffCommentAuthors, displaySubmission } from "./submissions.js";
@@ -55,6 +55,22 @@ const FAIR_ASMT_PARAM = z
     "Whether this assessment is published to the school's continuous reporting tool where parents see the assessment, grade, graded rubric, and comments — adds the FAIR tag to the title. REQUIRED when template:'assessment': ask the teacher, never assume.",
   );
 
+const ASSIGNMENT_GROUP_PARAM = z
+  .union([z.string(), z.number()])
+  .optional()
+  .describe(
+    "Canvas assignment group this assignment belongs to — numeric group id or exact group name (case-insensitive). REQUIRED when template:'assessment': the group name IS the {type} in the assessment title and its group_weight IS the {percent} — ask the teacher which group the assessment belongs to (the percent then comes from Canvas, not the teacher's memory). Use list_assignment_groups to see the course's groups.",
+  );
+
+const ASMT_PERCENT_PARAM = z
+  .number()
+  .min(0)
+  .max(100)
+  .optional()
+  .describe(
+    "Assessment weight percent for the title's {percent} — only needed when the resolved assignment group has no usable group_weight (weights disabled or weight 0). When the group carries a real weight, that Canvas value wins and this is only cross-checked.",
+  );
+
 const CREATE_ASSIGNMENT_INPUT = {
   course_identifier: z.union([z.string(), z.number()]),
   name: z.string(),
@@ -77,6 +93,8 @@ const CREATE_ASSIGNMENT_INPUT = {
     ),
   final_asmt: FINAL_ASMT_PARAM,
   fair_asmt: FAIR_ASMT_PARAM,
+  assignment_group: ASSIGNMENT_GROUP_PARAM,
+  asmt_percent: ASMT_PERCENT_PARAM,
   slots: z
     .record(z.string(), z.string())
     .optional()
@@ -120,6 +138,8 @@ const UPDATE_ASSIGNMENT_INPUT = {
     ),
   final_asmt: FINAL_ASMT_PARAM,
   fair_asmt: FAIR_ASMT_PARAM,
+  assignment_group: ASSIGNMENT_GROUP_PARAM,
+  asmt_percent: ASMT_PERCENT_PARAM,
   slots: z
     .record(z.string(), z.string())
     .optional()
@@ -138,6 +158,10 @@ const UPDATE_ASSIGNMENT_INPUT = {
     .describe(
       "When re-applying a template, force-remove sections that are default-include.",
     ),
+};
+
+const LIST_ASSIGNMENT_GROUPS_INPUT = {
+  course_identifier: z.union([z.string(), z.number()]),
 };
 
 const GET_ASSIGNMENT_DETAILS_INPUT = {
@@ -237,6 +261,136 @@ async function fetchCourseNameIfTemplateNeedsIt(
   }
 }
 
+interface CanvasAssignmentGroup {
+  id: number;
+  name?: string;
+  position?: number;
+  group_weight?: number | null;
+}
+
+async function fetchAssignmentGroups(
+  canvas: CanvasClient,
+  courseId: number,
+): Promise<CanvasAssignmentGroup[]> {
+  const { items } = await canvas.getPaginated<CanvasAssignmentGroup>(
+    `/api/v1/courses/${courseId}/assignment_groups`,
+  );
+  return items;
+}
+
+function formatGroupList(groups: CanvasAssignmentGroup[]): string {
+  if (groups.length === 0) return "(no assignment groups found in this course)";
+  return groups
+    .map((group) => `"${group.name ?? "(unnamed)"}" (id ${group.id}, weight ${group.group_weight ?? 0}%)`)
+    .join(", ");
+}
+
+function resolveAssignmentGroup(
+  toolName: string,
+  groups: CanvasAssignmentGroup[],
+  identifier: string | number,
+): CanvasAssignmentGroup {
+  const asNumber =
+    typeof identifier === "number"
+      ? identifier
+      : /^\d+$/.test(identifier.trim())
+        ? Number(identifier.trim())
+        : null;
+  if (asNumber !== null) {
+    const byId = groups.find((group) => group.id === asNumber);
+    if (byId) return byId;
+    if (typeof identifier === "number") {
+      throw new Error(
+        `${toolName}: no assignment group with id ${identifier} in this course. Ask the teacher which group this belongs to and retry with the exact name or a listed id. Course assignment groups: ${formatGroupList(groups)}.`,
+      );
+    }
+  }
+  const wanted = String(identifier).trim().toLowerCase();
+  const matches = groups.filter((group) => (group.name ?? "").trim().toLowerCase() === wanted);
+  if (matches.length === 1) return matches[0]!;
+  const problem =
+    matches.length === 0 ? "does not match any assignment group" : `matches ${matches.length} assignment groups`;
+  throw new Error(
+    `${toolName}: assignment_group "${identifier}" ${problem} in this course. Ask the teacher which group this belongs to and retry with the exact name or numeric id. Course assignment groups: ${formatGroupList(groups)}.`,
+  );
+}
+
+function assertAssessmentGroupProvided(
+  toolName: string,
+  assignmentGroup: string | number | undefined,
+  groups: CanvasAssignmentGroup[],
+): void {
+  if (assignmentGroup !== undefined) return;
+  throw new Error(
+    `${toolName}: template 'assessment' requires assignment_group — ask the teacher which assignment group this assessment belongs to; the group is the {type} in the title and its weight is the {percent}. Course assignment groups: ${formatGroupList(groups)}.`,
+  );
+}
+
+// Canvas reports group_weight 0 for every group when weighted assignment
+// groups are disabled, so 0 and null are both treated as "no usable weight".
+function resolveAssessmentPercent(
+  toolName: string,
+  group: CanvasAssignmentGroup,
+  asmtPercent: number | undefined,
+): { percent: number; warnings: string[] } {
+  const warnings: string[] = [];
+  const groupWeight = group.group_weight;
+  if (typeof groupWeight === "number" && groupWeight > 0) {
+    if (asmtPercent !== undefined && asmtPercent !== groupWeight) {
+      warnings.push(
+        `asmt_percent ${asmtPercent} differs from assignment group "${group.name ?? group.id}"'s Canvas group_weight ${groupWeight}% — the Canvas weight wins in the suggested title. Confirm with the teacher if that looks wrong.`,
+      );
+    }
+    return { percent: groupWeight, warnings };
+  }
+  if (asmtPercent !== undefined) return { percent: asmtPercent, warnings };
+  throw new Error(
+    `${toolName}: assignment group "${group.name ?? group.id}" has no usable group_weight (weighted assignment groups may be disabled for this course) — ask the teacher what percent of the grade this assessment is worth and retry with asmt_percent (0-100).`,
+  );
+}
+
+interface SuggestedTitleVars {
+  type: string;
+  name: string;
+  week: number | null;
+  percent: number;
+  fair_flag: string;
+  final_flag: string;
+}
+
+// Unknown {vars} in the format are intentionally left untouched — schools may
+// carry placeholders this server doesn't know how to fill.
+function composeSuggestedTitle(
+  titleFormat: string,
+  vars: SuggestedTitleVars,
+): { title: string; warnings: string[] } {
+  const warnings: string[] = [];
+  if (vars.week === null && titleFormat.includes("{week}")) {
+    warnings.push(
+      'Could not resolve the academic week for the suggested title (the date falls on a school break or outside the configured calendar, or no calendar is configured) — substituted "?". Confirm the week number with the teacher.',
+    );
+  }
+  const substitutions: Record<string, string> = {
+    type: vars.type,
+    name: vars.name,
+    week: vars.week === null ? "?" : String(vars.week),
+    percent: String(vars.percent),
+    fair_flag: vars.fair_flag,
+    final_flag: vars.final_flag,
+  };
+  let title = titleFormat;
+  for (const [token, value] of Object.entries(substitutions)) {
+    title = title.split(`{${token}}`).join(value);
+  }
+  return { title, warnings };
+}
+
+function assessmentWeekFor(dueAt: string | undefined, schoolConfig: SchoolConfig | null): number | null {
+  const date = dueAt !== undefined ? new Date(dueAt) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+  return computeAcademicWeek(date, schoolConfig?.academicCalendar);
+}
+
 function assertAssessmentFlagsProvided(
   toolName: string,
   finalAsmt: boolean | undefined,
@@ -283,6 +437,34 @@ function assessmentTitleWarnings(name: string, fairAsmt: boolean, finalAsmt: boo
     );
   }
   return warnings;
+}
+
+interface GroupAndPercentResolution {
+  group: CanvasAssignmentGroup;
+  percent?: number;
+  warnings: string[];
+}
+
+async function resolveGroupAndPercent(
+  toolName: string,
+  canvas: CanvasClient,
+  courseId: number,
+  args: { assignment_group?: string | number; asmt_percent?: number },
+  usingAssessmentTemplate: boolean,
+): Promise<GroupAndPercentResolution | null> {
+  if (args.assignment_group === undefined && !usingAssessmentTemplate) return null;
+  const groups = await fetchAssignmentGroups(canvas, courseId);
+  if (usingAssessmentTemplate) {
+    assertAssessmentGroupProvided(toolName, args.assignment_group, groups);
+  }
+  const group = resolveAssignmentGroup(toolName, groups, args.assignment_group!);
+  if (!usingAssessmentTemplate) return { group, warnings: [] };
+  const { percent, warnings } = resolveAssessmentPercent(toolName, group, args.asmt_percent);
+  return { group, percent, warnings };
+}
+
+function displayAssignmentGroup(group: CanvasAssignmentGroup): Record<string, unknown> {
+  return { id: group.id, name: group.name ?? null, group_weight: group.group_weight ?? null };
 }
 
 export function registerAssignmentTools(
@@ -414,12 +596,62 @@ export function registerAssignmentTools(
   );
 
   server.registerTool(
+    "list_assignment_groups",
+    {
+      description:
+        "List a course's Canvas assignment groups (id, name, position, group_weight) plus the course's apply_assignment_group_weights flag. " +
+        "For assessments the group carries the title semantics: the group name IS the {type} in the assessment title format and its group_weight IS the {percent} (Canvas weighted assignment groups) — " +
+        "ask the teacher which group an assessment belongs to, then take the percent from this tool's output rather than the teacher's memory. " +
+        "When apply_assignment_group_weights is false, group weights do not affect grading.",
+      inputSchema: LIST_ASSIGNMENT_GROUPS_INPUT,
+    },
+    async (input) => {
+      const args = input as { course_identifier: string | number };
+      return safeHandler("list_assignment_groups", async () => {
+        const courseId = await canvas.resolveCourseId(args.course_identifier);
+        const { items: groups, truncated, pages } = await canvas.getPaginated<CanvasAssignmentGroup>(
+          `/api/v1/courses/${courseId}/assignment_groups`,
+        );
+        const course = await canvas.get<CanvasCourseLite & { apply_assignment_group_weights?: boolean }>(
+          `/api/v1/courses/${courseId}`,
+        );
+        const weightsApplied = course.apply_assignment_group_weights === true;
+        const trimmedGroups = groups.map((group) => ({
+          id: group.id,
+          name: group.name ?? null,
+          position: group.position ?? null,
+          group_weight: group.group_weight ?? null,
+        }));
+        return jsonResult(
+          {
+            course_id: courseId,
+            count: trimmedGroups.length,
+            pages,
+            truncated,
+            apply_assignment_group_weights: weightsApplied,
+            assignment_groups: trimmedGroups,
+          },
+          {
+            summary:
+              `Course ${courseId}: ${trimmedGroups.length} assignment group(s).` +
+              (weightsApplied
+                ? ""
+                : " Note: assignment group weights are NOT applied to grades in this course (apply_assignment_group_weights=false) — group_weight values do not affect grading."),
+          },
+        );
+      });
+    },
+  );
+
+  server.registerTool(
     "create_assignment",
     {
       description:
         "Create a new Canvas assignment as a draft (published is forced false per the cross-project never-auto-publish rule — teacher publishes after review). Bypasses the course-code cache so a rename mid-session can't misroute the write. " +
         "The description is wrapped in the school's 'default' page template automatically; pass template='assessment' for Franklin assessments — discover slot names and the ASMT title format via list_page_templates — or template='none' to skip wrapping. " +
-        "template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag) and fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag): ask the teacher both questions, never assume. " +
+        "template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag), fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag), and assignment_group (the Canvas assignment group — its name is the {type} in the assessment title and its group_weight is the {percent}): ask the teacher all three, never assume; the weight then comes from Canvas, not the teacher's memory. " +
+        "The response returns suggested_title composed from the school's assessment title format — propose it to the teacher and let them adjust. " +
+        "assignment_group also works on non-assessment assignments as a plain group placement. " +
         "Multi-slot templates need content via slots={...}; include_sections / omit_sections override the template's default optional-section state per-call. " +
         SUBMISSION_TYPES_DESCRIPTION,
       inputSchema: CREATE_ASSIGNMENT_INPUT,
@@ -434,7 +666,16 @@ export function registerAssignmentTools(
 
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
 
+        const groupResolution = await resolveGroupAndPercent(
+          "create_assignment",
+          canvas,
+          courseId,
+          args,
+          usingAssessmentTemplate,
+        );
+
         const assignmentPayload: Record<string, unknown> = { name: args.name, published: false };
+        if (groupResolution) assignmentPayload.assignment_group_id = groupResolution.group.id;
         // Assignments legitimately exist without descriptions — only engage the
         // template machinery when the caller supplied content, so we never
         // create chrome-only descriptions.
@@ -484,10 +725,28 @@ export function registerAssignmentTools(
         }
 
         const warnings: string[] = [...(templateApplication?.warnings ?? [])];
+        if (groupResolution) {
+          responsePayload.assignment_group = displayAssignmentGroup(groupResolution.group);
+          warnings.push(...groupResolution.warnings);
+        }
         if (usingAssessmentTemplate) {
           const fairAsmt = args.fair_asmt === true;
           const finalAsmt = args.final_asmt === true;
           responsePayload.suggested_title_flags = suggestedTitleFlags(fairAsmt, finalAsmt);
+          responsePayload.resolved_percent = groupResolution!.percent;
+          const titleFormat = schoolConfig?.pageTemplates?.[ASSESSMENT_TEMPLATE_NAME]?.titleFormat;
+          if (titleFormat !== undefined) {
+            const composed = composeSuggestedTitle(titleFormat, {
+              type: groupResolution!.group.name ?? "",
+              name: args.name,
+              week: assessmentWeekFor(args.due_at, schoolConfig),
+              percent: groupResolution!.percent!,
+              fair_flag: fairAsmt ? "FAIR " : "",
+              final_flag: finalAsmt ? "FINAL " : "",
+            });
+            responsePayload.suggested_title = composed.title;
+            warnings.push(...composed.warnings);
+          }
           warnings.push(...assessmentTitleWarnings(args.name, fairAsmt, finalAsmt));
         }
         if (warnings.length > 0) responsePayload.warnings = warnings;
@@ -509,7 +768,8 @@ export function registerAssignmentTools(
         "Update fields on an existing Canvas assignment. Sends only the provided fields and never touches the published state. " +
         "Two modes: (1) Simple field update — provided fields (description included) are sent verbatim. " +
         "(2) Re-apply template — pass `template`, `slots`, and/or `include_sections`/`omit_sections` to rebuild the description from the school template (same machinery as create_assignment; pass template='assessment' for Franklin assessments — discover slot names via list_page_templates). " +
-        "Re-applying template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag) and fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag): ask the teacher both questions, never assume. " +
+        "Re-applying template='assessment' REQUIRES final_asmt (counts toward the final grade → FINAL title tag), fair_asmt (published to the parent-facing continuous reporting tool → FAIR title tag), and assignment_group (the Canvas assignment group — its name is the {type} in the assessment title and its group_weight is the {percent}): ask the teacher, never assume; the response returns suggested_title composed from the school's title format — propose it to the teacher and let them adjust. " +
+        "In simple mode, assignment_group works as a plain regroup (sets assignment_group_id; numeric id or exact case-insensitive group name). " +
         "When re-applying a template, pass ALL slots you want in the result, not just the ones that changed — the description is rebuilt from scratch. Pass template='none' to force simple mode. " +
         "Caveat: Canvas silently ignores submission_types changes once an assignment has student submissions — the response is checked and a warning is returned when that happens. " +
         SUBMISSION_TYPES_DESCRIPTION,
@@ -535,9 +795,9 @@ export function registerAssignmentTools(
         const usingTemplate = hasTemplateArgs && args.template !== "none";
         const usingAssessmentTemplate = usingTemplate && args.template === ASSESSMENT_TEMPLATE_NAME;
 
-        if (Object.keys(assignmentPayload).length === 0 && !usingTemplate) {
+        if (Object.keys(assignmentPayload).length === 0 && !usingTemplate && args.assignment_group === undefined) {
           throw new Error(
-            "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types) or template args (template/slots/include_sections/omit_sections).",
+            "update_assignment: provide at least one field to update (name/description/due_at/unlock_at/lock_at/points_possible/submission_types/assignment_group) or template args (template/slots/include_sections/omit_sections).",
           );
         }
         if (usingAssessmentTemplate) {
@@ -545,6 +805,15 @@ export function registerAssignmentTools(
         }
 
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
+
+        const groupResolution = await resolveGroupAndPercent(
+          "update_assignment",
+          canvas,
+          courseId,
+          args,
+          usingAssessmentTemplate,
+        );
+        if (groupResolution) assignmentPayload.assignment_group_id = groupResolution.group.id;
 
         let templateApplication: ReturnType<typeof applyPageTemplate> | null = null;
         let resolvedName = args.name;
@@ -583,11 +852,28 @@ export function registerAssignmentTools(
         );
 
         const warnings: string[] = [...(templateApplication?.warnings ?? [])];
+        if (groupResolution) warnings.push(...groupResolution.warnings);
         let suggestedFlags: string | undefined;
+        let suggestedTitle: string | undefined;
+        let resolvedPercent: number | undefined;
         if (usingAssessmentTemplate) {
           const fairAsmt = args.fair_asmt === true;
           const finalAsmt = args.final_asmt === true;
           suggestedFlags = suggestedTitleFlags(fairAsmt, finalAsmt);
+          resolvedPercent = groupResolution!.percent;
+          const titleFormat = schoolConfig?.pageTemplates?.[ASSESSMENT_TEMPLATE_NAME]?.titleFormat;
+          if (titleFormat !== undefined) {
+            const composed = composeSuggestedTitle(titleFormat, {
+              type: groupResolution!.group.name ?? "",
+              name: resolvedName ?? updated.name ?? "",
+              week: assessmentWeekFor(args.due_at, schoolConfig),
+              percent: groupResolution!.percent!,
+              fair_flag: fairAsmt ? "FAIR " : "",
+              final_flag: finalAsmt ? "FINAL " : "",
+            });
+            suggestedTitle = composed.title;
+            warnings.push(...composed.warnings);
+          }
           warnings.push(...assessmentTitleWarnings(resolvedName ?? updated.name ?? "", fairAsmt, finalAsmt));
         }
         let submissionTypesIgnored = false;
@@ -616,7 +902,10 @@ export function registerAssignmentTools(
           if (templateApplication.omittedSections.length > 0)
             responsePayload.omitted_sections = templateApplication.omittedSections;
         }
+        if (groupResolution) responsePayload.assignment_group = displayAssignmentGroup(groupResolution.group);
         if (suggestedFlags !== undefined) responsePayload.suggested_title_flags = suggestedFlags;
+        if (resolvedPercent !== undefined) responsePayload.resolved_percent = resolvedPercent;
+        if (suggestedTitle !== undefined) responsePayload.suggested_title = suggestedTitle;
         if (warnings.length > 0) responsePayload.warnings = warnings;
 
         return jsonResult(responsePayload, {
