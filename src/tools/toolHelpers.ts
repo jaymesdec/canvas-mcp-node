@@ -24,7 +24,10 @@ export function textResult(text: string): McpTextResult {
 
 /** Format an error as a tool error result (never throw out of a registered handler). */
 export function errorResult(error: unknown, options: { context?: string } = {}): McpTextResult {
-  const prefix = options.context ? `${options.context}: ` : "";
+  const rawMessage =
+    error instanceof Error ? error.message : String(error);
+  const prefix =
+    options.context && !rawMessage.startsWith(`${options.context}:`) ? `${options.context}: ` : "";
   let message: string;
   if (error instanceof CanvasApiError) {
     const canvas = error.canvasMessage ? ` — ${error.canvasMessage}` : "";

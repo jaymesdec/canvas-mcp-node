@@ -25,7 +25,7 @@ import { registerCodeExecutionTools } from "./tools/code_exec.js";
 import { registerAnonymizationTools } from "./tools/anonymization.js";
 
 const SERVER_NAME = "canvas-mcp";
-const SERVER_VERSION = "0.4.5";
+const SERVER_VERSION = "0.4.6";
 
 /**
  * Where the .mcpb-bundled franklin.json lives relative to the compiled

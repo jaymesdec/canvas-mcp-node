@@ -247,6 +247,44 @@ describe("registerRubricTools", () => {
       expect(association?.id).toBe(7777);
     });
 
+    it("unwraps Canvas's { rubric, rubric_association } response shape", async () => {
+      const { client } = buildMockCanvas([
+        {
+          status: 200,
+          data: {
+            rubric: { id: 999, title: "Project Rubric", data: [] },
+            rubric_association: {
+              id: 8888,
+              rubric_id: 999,
+              association_id: 5555,
+              association_type: "Assignment",
+              use_for_grading: true,
+              hide_score_total: false,
+              purpose: "grading",
+            },
+          },
+        },
+      ]);
+      const harness = buildToolHarness();
+      registerRubricTools(harness.server as never, client);
+      const result = (await harness.call("create_rubric_association", {
+        course_identifier: 60366,
+        rubric_id: 999,
+        association_type: "Assignment",
+        association_id: 5555,
+        use_for_grading: true,
+      })) as ToolResponse;
+
+      expect(result.isError).toBeFalsy();
+      const association = parseJsonResult(result).rubric_association as {
+        id: number;
+        use_for_grading: boolean;
+      };
+      expect(association?.id).toBe(8888);
+      expect(association?.use_for_grading).toBe(true);
+      expect(result.content[0]?.text).toContain("use_for_grading=true");
+    });
+
     it("supports Quiz and Discussion association types", async () => {
       const { client, requests } = buildMockCanvas([
         { status: 200, data: { id: 1, rubric_id: 999, association_id: 333, association_type: "Quiz", use_for_grading: true, hide_score_total: false, purpose: "grading" } },

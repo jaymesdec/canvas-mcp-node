@@ -337,8 +337,10 @@ export function applyPageTemplate(
   // --- Slot substitution ---
   const slots: Record<string, string> = { ...(context.slots ?? {}) };
   if (body !== "" && slots.body === undefined) slots.body = body;
+  // Scan the working html (after omitted sections were stripped) so slots that
+  // only lived inside an omitted section neither substitute nor warn.
   const slotTokensInTemplate = new Set<string>();
-  for (const match of template.html.matchAll(/\{\{slot:([\w-]+)\}\}/g)) {
+  for (const match of html.matchAll(/\{\{slot:([\w-]+)\}\}/g)) {
     slotTokensInTemplate.add(match[1]!);
   }
   for (const slotName of slotTokensInTemplate) {
@@ -352,7 +354,7 @@ export function applyPageTemplate(
   // --- Built-in tokens ---
   if (html.includes("{{body}}")) {
     html = html.split("{{body}}").join(body);
-  } else if (body !== "" && !slotTokensInTemplate.has("body") && Object.keys(slotTokensInTemplate).length === 0) {
+  } else if (body !== "" && slotTokensInTemplate.size === 0) {
     // Pure single-slot legacy template with no {{body}} token and no slots — append.
     result.warnings.push(
       `Template "${name}" has no {{body}} token; body content was appended after the template HTML.`,

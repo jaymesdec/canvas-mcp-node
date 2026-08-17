@@ -345,3 +345,14 @@ Deliberately excluded: **`delete_assignment` and `delete_quiz` do not exist** �
 
 - Week warnings now state the exact reason a week number is unknown: **school break** (naming the surrounding weeks and their dates), before/after the school year (naming the boundary week), or no calendar configured — and explicitly instruct the model never to estimate a week number itself. Previously one ambiguous message covered all cases, which led models to claim no calendar was loaded and hand teachers raw-math week estimates.
 - Assessment tool descriptions now carry conduct rules: ask the FAIR/FINAL/group questions in plain language (never surface parameter names), never offer to skip the school template (template:'none' is only for explicit teacher requests), and never ask whether to create as a draft (always unpublished).
+
+## v0.4.6 — quiz timing params + skill-compatibility fixes
+
+Found while live-testing the `canvas-mcp-skills` collection against a real Canvas instance (2026-08-17):
+
+- `create_quiz` / `update_quiz` gain **`time_limit`** (minutes) and **`show_correct_answers`**. Previously the schema silently stripped both, so a skill passing `time_limit: 20` produced an untimed quiz with no error. `get_quiz` now surfaces `show_correct_answers` too.
+- `create_rubric_association` now unwraps Canvas's `{ rubric, rubric_association }` response — the payload's `rubric_association` is the actual association (previously double-nested with `use_for_grading=undefined` in the summary line).
+- Empty-slot warnings no longer fire for slots that only live inside an omitted section (e.g. `omit_sections: ["assessment"]` on the lesson template no longer warns about the empty `assessment` slot).
+- Passing `body` with a multi-slot template no longer appends the body after the template HTML (latent `Object.keys(Set)` bug — the "no slots" guard never guarded).
+- Tool error messages no longer double the tool-name prefix (`create_assignment: create_assignment: …`).
+- `get_school_info`'s summary line now says "outside the configured school year" instead of the misleading "no calendar configured" when a calendar exists but today has no week number.

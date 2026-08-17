@@ -17,6 +17,11 @@ const CREATE_QUIZ_INPUT = {
   points_possible: z.number().optional(),
   shuffle_answers: z.boolean().optional(),
   allowed_attempts: z.number().int().optional(),
+  time_limit: z.number().int().optional().describe("Time limit in minutes. Omit for no limit."),
+  show_correct_answers: z
+    .boolean()
+    .optional()
+    .describe("Whether students see correct answers after submitting. Canvas defaults to true when omitted."),
 };
 
 const QUESTION_ANSWER_SCHEMA = z.object({
@@ -75,6 +80,11 @@ const UPDATE_QUIZ_INPUT = {
   points_possible: z.number().optional(),
   shuffle_answers: z.boolean().optional(),
   allowed_attempts: z.number().int().optional(),
+  time_limit: z.number().int().optional().describe("Time limit in minutes. Omit for no limit."),
+  show_correct_answers: z
+    .boolean()
+    .optional()
+    .describe("Whether students see correct answers after submitting. Canvas defaults to true when omitted."),
 };
 
 const UPDATE_QUIZ_QUESTION_INPUT = {
@@ -121,6 +131,7 @@ const QUIZ_DETAIL_DISPLAY_KEYS = [
   "shuffle_answers",
   "allowed_attempts",
   "time_limit",
+  "show_correct_answers",
   "one_question_at_a_time",
   "hide_results",
   "scoring_policy",
@@ -187,6 +198,8 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
         if (args.points_possible !== undefined) quizPayload.points_possible = args.points_possible;
         if (args.shuffle_answers !== undefined) quizPayload.shuffle_answers = args.shuffle_answers;
         if (args.allowed_attempts !== undefined) quizPayload.allowed_attempts = args.allowed_attempts;
+        if (args.time_limit !== undefined) quizPayload.time_limit = args.time_limit;
+        if (args.show_correct_answers !== undefined) quizPayload.show_correct_answers = args.show_correct_answers;
 
         const created = await canvas.post<CanvasQuizLite>(
           `/api/v1/courses/${courseId}/quizzes`,
@@ -302,9 +315,11 @@ export function registerQuizTools(server: McpServer, canvas: CanvasClient): void
         if (args.points_possible !== undefined) quizPayload.points_possible = args.points_possible;
         if (args.shuffle_answers !== undefined) quizPayload.shuffle_answers = args.shuffle_answers;
         if (args.allowed_attempts !== undefined) quizPayload.allowed_attempts = args.allowed_attempts;
+        if (args.time_limit !== undefined) quizPayload.time_limit = args.time_limit;
+        if (args.show_correct_answers !== undefined) quizPayload.show_correct_answers = args.show_correct_answers;
         if (Object.keys(quizPayload).length === 0) {
           throw new Error(
-            "update_quiz: provide at least one field to update (title, description, quiz_type, due_at, points_possible, shuffle_answers, allowed_attempts).",
+            "update_quiz: provide at least one field to update (title, description, quiz_type, due_at, points_possible, shuffle_answers, allowed_attempts, time_limit, show_correct_answers).",
           );
         }
 

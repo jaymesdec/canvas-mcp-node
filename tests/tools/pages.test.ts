@@ -539,6 +539,27 @@ describe("registerPageTools", () => {
       expect(warnings.some((line) => line.includes("{{slot:to}}"))).toBe(true);
     });
 
+    it("does not warn about empty slots that only live inside an omitted section", async () => {
+      const { client } = buildMockCanvas([
+        { status: 200, data: { id: 60366, name: "Design 9" } },
+        { status: 200, data: { url: "x", title: "x", published: false } },
+      ]);
+      const harness = buildToolHarness();
+      registerPageTools(harness.server as never, client, templatedConfig);
+      const result = (await harness.call("create_page", {
+        course_identifier: 60366,
+        title: "Formative only",
+        template: "multiSlot",
+        slots: { about: "x", to: "x" },
+        omit_sections: ["assessment"],
+        // discussion (default-omit) and assessment (explicitly omitted) slots
+        // are gone from the rendered page — no empty-slot noise for either.
+      })) as ToolResponse;
+      const warnings = (parseJsonResult(result).warnings as string[] | undefined) ?? [];
+      expect(warnings.some((line) => line.includes("{{slot:assessment}}"))).toBe(false);
+      expect(warnings.some((line) => line.includes("{{slot:discussion}}"))).toBe(false);
+    });
+
     it("HTML-escapes the course_name token (defense against malicious course rename)", async () => {
       const { client, requests } = buildMockCanvas([
         { status: 200, data: { id: 60366, name: '<img src=x onerror="alert(1)">' } },

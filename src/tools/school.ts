@@ -91,7 +91,9 @@ export function registerSchoolInfoTools(
                   ? `week ${currentWeek}`
                   : onBreak
                     ? "school is on break this week"
-                    : "no calendar configured"
+                    : calendar
+                      ? "outside the configured school year (no current week)"
+                      : "no calendar configured"
               }.`,
           },
         );

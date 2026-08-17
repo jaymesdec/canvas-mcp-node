@@ -282,15 +282,20 @@ export function registerRubricTools(server: McpServer, canvas: CanvasClient): vo
       return safeHandler("create_rubric_association", async () => {
         const courseId = await canvas.resolveCourseId(args.course_identifier, { bypassCache: true });
         const body = buildAssociationFormData(args);
-        const created = await canvas.post<CanvasRubricAssociation>(
-          `/api/v1/courses/${courseId}/rubric_associations`,
-          body,
-          { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
-        );
+        // Canvas responds with { rubric, rubric_association }, not a bare association.
+        const created = await canvas.post<
+          CanvasRubricAssociation | { rubric?: CanvasRubric; rubric_association?: CanvasRubricAssociation }
+        >(`/api/v1/courses/${courseId}/rubric_associations`, body, {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        });
+        const association =
+          "rubric_association" in created && created.rubric_association
+            ? created.rubric_association
+            : (created as CanvasRubricAssociation);
         return jsonResult(
-          { course_id: courseId, rubric_association: created },
+          { course_id: courseId, rubric_association: association },
           {
-            summary: `Attached rubric ${args.rubric_id} to ${args.association_type} ${args.association_id} in course ${courseId} (use_for_grading=${created.use_for_grading}).`,
+            summary: `Attached rubric ${args.rubric_id} to ${args.association_type} ${args.association_id} in course ${courseId} (use_for_grading=${association.use_for_grading}).`,
           },
         );
       });

@@ -62,11 +62,11 @@ Course identifiers resolve by **unique exact match** (case-insensitive, course c
 
 | Tool | Purpose |
 |---|---|
-| `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Create a quiz. **`published: false` forced.** |
+| `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?, time_limit?, show_correct_answers?)` | Create a quiz. **`published: false` forced.** |
 | `create_quiz_question(course_identifier, quiz_id, question)` | Add a question. `question.question_type` is zod-validated. |
 | `list_quizzes(course_identifier)` | List classic quizzes (id, title, quiz_type, published, due_at, points_possible, question_count). New Quizzes live on a separate API and won't appear here. |
 | `get_quiz(course_identifier, quiz_id)` | Quiz settings (list fields plus description, shuffle_answers, allowed_attempts, time_limit, one_question_at_a_time, hide_results, scoring_policy, access_code, unlock_at, lock_at) plus its questions (trimmed to id, position, name, type, points, text, answers). |
-| `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?)` | Update quiz settings. Never touches published state. |
+| `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?, time_limit?, show_correct_answers?)` | Update quiz settings. Never touches published state. |
 | `update_quiz_question(course_identifier, quiz_id, question_id, question)` | Replace a question's content (same payload shape as `create_quiz_question`). Edits on quizzes with submissions create a new quiz version. |
 | `delete_quiz_question(course_identifier, quiz_id, question_id)` | Delete a question from a quiz. Same versioning caveat as `update_quiz_question`. |
 

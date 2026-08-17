@@ -78,6 +78,8 @@ describe("registerQuizTools", () => {
       due_at: "2026-06-01T23:59:00Z",
       points_possible: 25,
       allowed_attempts: 3,
+      time_limit: 45,
+      show_correct_answers: false,
     });
     const payload = (requests[0]?.data as { quiz: Record<string, unknown> }).quiz;
     expect(payload).toMatchObject({
@@ -85,6 +87,8 @@ describe("registerQuizTools", () => {
       due_at: "2026-06-01T23:59:00Z",
       points_possible: 25,
       allowed_attempts: 3,
+      time_limit: 45,
+      show_correct_answers: false,
       published: false,
     });
   });
@@ -285,6 +289,7 @@ describe("registerQuizTools", () => {
         "shuffle_answers",
         "allowed_attempts",
         "time_limit",
+        "show_correct_answers",
         "one_question_at_a_time",
         "hide_results",
         "scoring_policy",
