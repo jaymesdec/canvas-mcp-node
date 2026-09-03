@@ -45,7 +45,7 @@ src/
 │   ├── rubrics.ts          # list_all_rubrics, get_rubric_details, create_rubric, create_rubric_association
 │   ├── users.ts            # list_users, list_user_enrollments, list_account_users
 │   ├── pages.ts            # list_pages, get_page_content, create_page, edit_page_content, delete_page, list_page_templates
-│   ├── quizzes.ts          # create_quiz, create_quiz_question, list_quizzes, get_quiz, update_quiz, update_quiz_question, delete_quiz_question
+│   ├── quizzes.ts          # New Quizzes (/api/quiz/v1): create_quiz, create_quiz_question, list_quizzes, get_quiz, update_quiz, update_quiz_question, delete_quiz_question (friendly payload → NQ item schema translated in buildItemEntry)
 │   ├── submissions.ts      # list_submissions, get_submission_rubric_assessment, download_submission_attachment
 │   ├── discussionAnonymizer.ts # entry-author pseudonymization + roster-name body scrub (best-effort)
 │   ├── discussions.ts      # list_discussions, get_discussion, create_discussion, update_discussion, delete_discussion, list_announcements, create_announcement, update_announcement, delete_announcement

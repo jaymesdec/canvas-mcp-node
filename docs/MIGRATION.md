@@ -270,13 +270,13 @@ Assignments:
 - `create_assignment(course_identifier, name, description?, due_at?, unlock_at?, lock_at?, points_possible?, submission_types?)` — created unpublished, always.
 - `update_assignment(course_identifier, assignment_id, ...same optional fields)` — partial update; never touches published state; warns if Canvas ignores a `submission_types` change.
 
-Quizzes (classic only — New Quizzes are on a separate API and show up in `list_assignments` as `external_tool` items):
+Quizzes (**New Quizzes**, `/api/quiz/v1` — a New Quiz is backed by an assignment, so `quiz_id` === assignment id; there is no New Quizzes submissions/regrade API):
 
-- `list_quizzes(course_identifier)` — trimmed quiz list with question counts.
-- `get_quiz(course_identifier, quiz_id)` — full settings + trimmed questions.
-- `update_quiz(course_identifier, quiz_id, ...)` — settings update; never touches published state.
-- `update_quiz_question(course_identifier, quiz_id, question_id, question)` — replace a question (same payload as `create_quiz_question`).
-- `delete_quiz_question(course_identifier, quiz_id, question_id)` — remove a question. Both question tools note Canvas's quiz-versioning behavior on quizzes with submissions.
+- `list_quizzes(course_identifier)` — trimmed New Quiz list (id, title, published, points_possible, due_at, html_url).
+- `get_quiz(course_identifier, quiz_id)` — settings + trimmed items (id, position, points_possible, interaction_type_slug, item_body).
+- `update_quiz(course_identifier, quiz_id, ...)` — settings update (PATCH); never touches published state.
+- `update_quiz_question(course_identifier, quiz_id, question_id, question)` — replace an item (PATCH; `question_id` is the item id).
+- `delete_quiz_question(course_identifier, quiz_id, question_id)` — remove an item (DELETE; `question_id` is the item id).
 
 Modules:
 
@@ -308,7 +308,7 @@ Deliberately excluded: **`delete_assignment` and `delete_quiz` do not exist** �
 - **`list_submissions` is trimmed.** Rows keep id, user_id, workflow_state, submitted_at, late, missing, grade, score, **`attempt`**, user, attachments, rubric_assessment, and submission_comments — and each comment keeps its **`author_id`** — both of which `grade-submissions` depends on. Submission-comment **authors are now anonymized unless they're course staff** (teachers/TAs keep real attribution); previously non-staff commenters could come through verbatim.
 - **`list_submissions` nested objects are allowlisted too.** `user` keeps `{id, name, email}`; `attachments` keep `{id, filename, display_name, content_type, size}` — the signed download `url` is **intentionally removed** (it embeds a bearer-equivalent verifier), use `download_submission_attachment` instead; `submission_comments` keep `{id, author_id, author_name, comment, created_at, attempt}`.
 - **`list_modules` is trimmed.** Modules carry id, name, position, workflow_state, published, items_count, unlock_at, require_sequential_progress, prerequisite_module_ids (plus `items` trimmed to id, title, type, content_id, page_url, position, published when `include_items: true`).
-- **`create_quiz` returns a trimmed response** (id, title, quiz_type, published, due_at, points_possible, question_count, html_url). Call `get_quiz` for the full settings (description, shuffle_answers, allowed_attempts, time_limit, access_code, ...).
+- **`create_quiz` returns a trimmed response** (id, title, published, points_possible, due_at, html_url). The `id` is the Canvas assignment id; `html_url` is constructed as `.../courses/<id>/assignments/<quiz_id>`. Call `get_quiz` for the full settings and items.
 - **`execute_typescript` returns human-readable text only.** The structured result object was removed — parse the printed stdout/stderr text; don't expect a JSON payload block.
 - **Course-code ambiguity errors instead of guessing.** A non-numeric `course_identifier` resolves only on a unique exact match (code first, then name). Multiple exact matches return an error listing the candidate courses with numeric ids — the model self-corrects by passing the id. Skills that relied on fuzzy near-miss resolution should switch to exact codes or numeric ids.
 - **`structuredContent` removed.** Tool results are now a single compact-JSON text block plus a one-line summary — payloads are no longer duplicated. No skill in the current audit reads `structuredContent`, so no changes are expected; if one asserts on it, parse the text block's JSON instead.
@@ -356,3 +356,14 @@ Found while live-testing the `canvas-mcp-skills` collection against a real Canva
 - Passing `body` with a multi-slot template no longer appends the body after the template HTML (latent `Object.keys(Set)` bug — the "no slots" guard never guarded).
 - Tool error messages no longer double the tool-name prefix (`create_assignment: create_assignment: …`).
 - `get_school_info`'s summary line now says "outside the configured school year" instead of the misleading "no calendar configured" when a calendar exists but today has no week number.
+
+## v0.5.0 — quiz tools retargeted to New Quizzes
+
+Franklin fully migrated Canvas to **New Quizzes**; Classic Quizzes are disabled, so the Classic-only quiz tools stopped working. All 7 quiz tools now target the New Quizzes service (`/api/quiz/v1`). Tool names and input schemas are unchanged, so `post-quiz` and any other caller keep the same call signatures.
+
+- **Same names, new backend.** `create_quiz` / `create_quiz_question` / `list_quizzes` / `get_quiz` / `update_quiz` / `update_quiz_question` / `delete_quiz_question` now hit `/api/quiz/v1/courses/:id/quizzes[/:assignment_id/items]`. A New Quiz is backed by an assignment, so **`quiz_id` === assignment id** (the string `id` returned by `create_quiz`).
+- **Friendly question payload preserved.** `create_quiz_question` still takes `{ question_type, question_text, points_possible, answers:[{answer_text, answer_weight}] }`. The server generates the New Quizzes UUIDs and `interaction_data`/`scoring_data` — callers never touch UUIDs.
+- **Question-type changes:** `multiple_choice_question`→choice, `true_false_question`→true-false, `multiple_answers_question`→multi-answer, `essay_question`→essay. **`short_answer_question`→ a manually-graded essay** (New Quizzes has no auto-graded fill-in; accepted variants become grader notes). **`text_only_question` removed** (not API-authorable). New: **`matching_question`** (`matches:[{left,right}]`, optional `distractors[]`) and **`ordering_question`** (`ordering_items[]` in correct order, optional labels).
+- **Settings map into `quiz_settings`:** `time_limit` (min)→`has_time_limit`+`session_time_limit_in_seconds`, `allowed_attempts`→`multiple_attempts`, `show_correct_answers`→`result_view_settings`, `shuffle_answers`/`shuffle_questions` passthrough. `quiz_type` is accepted but ignored.
+- **`update_quiz` / `update_quiz_question` use PATCH** (New Quizzes requirement). `question_id` on update/delete is the **item id** from `get_quiz` → `items[].id`.
+- **Gone with New Quizzes:** no submissions/regrade API (attempts live in SpeedGrader only); item banks and Stimulus passages are read-only via API. The no-auto-publish rule still holds — New Quizzes are created unpublished.

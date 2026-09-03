@@ -221,6 +221,11 @@ export class CanvasClient {
     return response.data;
   }
 
+  async patch<T>(path: string, data?: unknown, options?: RequestOptions): Promise<T> {
+    const response = await this.request<T>("PATCH", path, { ...options, data });
+    return response.data;
+  }
+
   async del<T>(path: string, options?: RequestOptions): Promise<T> {
     const response = await this.request<T>("DELETE", path, options);
     return response.data;

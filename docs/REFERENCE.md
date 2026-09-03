@@ -58,17 +58,19 @@ Course identifiers resolve by **unique exact match** (case-insensitive, course c
 | `delete_page(course_identifier, page_url)` | Permanently delete a Canvas wiki page. Bypasses the course-code cache to avoid misroutes. |
 | `list_page_templates()` | List the named page templates configured in the school config (names + descriptions only, not full HTML). |
 
-### Quizzes
+### Quizzes (New Quizzes / `/api/quiz/v1`)
+
+These tools target **New Quizzes**, not Classic. A New Quiz is backed by a Canvas assignment, so `quiz_id` IS the assignment id. There is no New Quizzes submissions/regrade API — student attempts surface only in SpeedGrader. `quiz_type` is accepted for compatibility but ignored (New Quizzes has no quiz_type).
 
 | Tool | Purpose |
 |---|---|
-| `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?, time_limit?, show_correct_answers?)` | Create a quiz. **`published: false` forced.** |
-| `create_quiz_question(course_identifier, quiz_id, question)` | Add a question. `question.question_type` is zod-validated. |
-| `list_quizzes(course_identifier)` | List classic quizzes (id, title, quiz_type, published, due_at, points_possible, question_count). New Quizzes live on a separate API and won't appear here. |
-| `get_quiz(course_identifier, quiz_id)` | Quiz settings (list fields plus description, shuffle_answers, allowed_attempts, time_limit, one_question_at_a_time, hide_results, scoring_policy, access_code, unlock_at, lock_at) plus its questions (trimmed to id, position, name, type, points, text, answers). |
-| `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, allowed_attempts?, time_limit?, show_correct_answers?)` | Update quiz settings. Never touches published state. |
-| `update_quiz_question(course_identifier, quiz_id, question_id, question)` | Replace a question's content (same payload shape as `create_quiz_question`). Edits on quizzes with submissions create a new quiz version. |
-| `delete_quiz_question(course_identifier, quiz_id, question_id)` | Delete a question from a quiz. Same versioning caveat as `update_quiz_question`. |
+| `create_quiz(course_identifier, title, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, shuffle_questions?, allowed_attempts?, time_limit?, show_correct_answers?)` | Create a New Quiz (unpublished, forced). `description` → quiz instructions; settings map into `quiz_settings`. Returns id (= assignment id) + a constructed `html_url`. |
+| `create_quiz_question(course_identifier, quiz_id, question)` | Add one item. Friendly payload (`question_type` + `answers[]` with `answer_weight` 100/0) is translated to the New Quizzes item schema server-side (UUIDs + scoring generated for you). Types: multiple_choice, true_false, multiple_answers, short_answer (→ manually-graded essay), essay, matching (`matches[]`), ordering (`ordering_items[]`). |
+| `list_quizzes(course_identifier)` | List New Quizzes (id, title, published, points_possible, due_at, html_url). |
+| `get_quiz(course_identifier, quiz_id)` | Quiz settings (title, published, points, due/unlock/lock, instructions, quiz_settings) plus items (trimmed to id, position, points_possible, interaction_type_slug, item_body). |
+| `update_quiz(course_identifier, quiz_id, title?, description?, quiz_type?, due_at?, points_possible?, shuffle_answers?, shuffle_questions?, allowed_attempts?, time_limit?, show_correct_answers?)` | Update quiz settings (PATCH). Never touches published state. |
+| `update_quiz_question(course_identifier, quiz_id, question_id, question)` | Replace an item's content (PATCH). `question_id` is the item id from `get_quiz` → `items[].id`. |
+| `delete_quiz_question(course_identifier, quiz_id, question_id)` | Delete an item (DELETE). `question_id` is the item id from `get_quiz` → `items[].id`. |
 
 ### Assignments
 
